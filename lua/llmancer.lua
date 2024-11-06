@@ -1,27 +1,35 @@
--- main module file
-local module = require("llmancer.main")
-
 ---@class Config
----@field opt string Your config option
-local config = {
-  opt = "Hello!",
-}
+---@field open_mode "vsplit"|"split"|"enew" How to open the chat buffer
+---@field buffer_name string Buffer name for the chat
+---@field anthropic_api_key string Anthropic API key
+---@field model string Model to use (e.g. "claude-3-sonnet-20240229")
+---@field max_tokens number Maximum tokens in response
+---@field temperature number Temperature for response generation
+---@field system_prompt string System prompt for the assistant
+---@field storage_dir string Directory to store chat histories
 
----@class MyModule
+-- Import the main module
+local main = require("llmancer.main")
+
+---@class LLMancerModule
+---@field setup fun(opts: Config|nil) Function to setup the plugin
+---@field open_chat fun() Function to open the chat buffer
+---@field list_chats fun() Function to list saved chats
+---@field config Config The current configuration
 local M = {}
 
+-- Forward the setup function
+---@param opts Config|nil
+M.setup = main.setup
+
+-- Forward the open_chat function
+M.open_chat = main.open_chat
+
+-- Forward the list_chats function
+M.list_chats = main.list_chats
+
+-- Forward the config
 ---@type Config
-M.config = config
-
----@param args Config?
--- you can define your setup function here. Usually configurations can be merged, accepting outside params and
--- you can also put some validation here for those.
-M.setup = function(args)
-  M.config = vim.tbl_deep_extend("force", M.config, args or {})
-end
-
-M.hello = function()
-  return module.my_first_function(M.config.opt)
-end
+M.config = main.config
 
 return M
