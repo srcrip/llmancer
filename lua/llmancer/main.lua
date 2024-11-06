@@ -24,6 +24,11 @@ M.config = {
   system_prompt = "You are a helpful AI assistant with expertise in programming and software development.",
   -- Directory to store chat histories
   storage_dir = vim.fn.stdpath("data") .. "/llmancer/chats",
+  -- Actions configuration
+  actions = {
+    -- Key mapping to trigger actions picker
+    keymap = "<leader>a",
+  },
 }
 
 -- Setup function to initialize the plugin with user config
@@ -66,6 +71,16 @@ function M.setup(opts)
   else
     vim.notify("LLMancer: nvim-treesitter is recommended for syntax highlighting", vim.log.levels.WARN)
   end
+
+  -- Set up buffer-local keymapping for actions
+  vim.api.nvim_create_autocmd("FileType", {
+    pattern = "llmancer",
+    callback = function(ev)
+      vim.keymap.set("n", M.config.actions.keymap,
+        function() require('llmancer.actions').show_actions() end,
+        { buffer = ev.buf, desc = "Show LLMancer actions" })
+    end
+  })
 end
 
 -- Function to generate a unique chat ID
