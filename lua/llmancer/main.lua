@@ -93,6 +93,9 @@ end
 ---@param chat_id string|nil The ID of an existing chat to open
 ---@return number bufnr The buffer number of the created chat buffer
 function M.open_chat(chat_id)
+  -- Store the current buffer as it will become the alternate buffer
+  local target_bufnr = vim.api.nvim_get_current_buf()
+  
   local chat_name = chat_id and ("LLMancer_" .. chat_id) or (M.config.buffer_name .. "_" .. generate_chat_id())
   
   -- Check if buffer already exists
@@ -135,32 +138,16 @@ function M.open_chat(chat_id)
     pcall(vim.treesitter.start, bufnr, "markdown")
   end
   
-  -- Add help text at the top
-  local help_text = {
-    "Welcome to LLMancer.nvim! 🤖",
-    "Currently using: " .. M.config.model,
-    "",
-    "Shortcuts:",
-    "- <Enter> in normal mode: Send message",
-    "- gd: View conversation history",
-    "- i or a: Enter insert mode to type",
-    "- <Esc>: Return to normal mode",
-    "",
-    "Type your message below:",
-    "----------------------------------------",
-    "",
-  }
+  -- After creating the chat buffer, set its target buffer
+  local chat = require('llmancer.chat')
+  chat.set_target_buffer(bufnr, target_bufnr)
+  
+  -- Add help text at the top using the new function
+  local help_text = chat.create_help_text(bufnr)
   vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, help_text)
   
-  -- Set up mappings for the chat buffer
-  vim.api.nvim_buf_set_keymap(bufnr, 'n', '<CR>', 
-    [[<cmd>lua require('llmancer.chat').send_message()<CR>]], 
-    { noremap = true, silent = true })
-  
-  -- Add mapping for viewing conversation
-  vim.api.nvim_buf_set_keymap(bufnr, 'n', 'gd',
-    [[<cmd>lua require('llmancer.chat').view_conversation()<CR>]],
-    { noremap = true, silent = true })
+  -- Set up buffer mappings
+  require('llmancer.chat').setup_buffer_mappings(bufnr)
   
   -- If loading existing chat, restore its content
   if chat_id then

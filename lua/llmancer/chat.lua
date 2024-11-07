@@ -10,6 +10,7 @@
 ---@field send_message fun() Function to send message
 ---@field view_conversation fun() Function to view the conversation
 ---@field send_to_anthropic fun(message: Message[], callback: fun(response: table|nil)) Function to send message to Anthropic
+---@field target_buffers table<number, number> Map of chat bufnr to target bufnr
 local M = {}
 
 local config = require('llmancer.main').config
@@ -18,6 +19,10 @@ local main = require('llmancer.main')
 -- Store chat history for each buffer
 ---@type table<number, ChatMessage[]>
 M.chat_history = {}
+
+-- Store target buffers for each chat buffer
+---@type table<number, number> Map of chat bufnr to target bufnr
+M.target_buffers = {}
 
 -- Function to generate a random ID
 ---@return number
@@ -52,12 +57,49 @@ local function with_retry(max_retries, initial_delay, request_fn)
   return nil
 end
 
+-- Function to parse params from buffer
+local function parse_params_from_buffer(bufnr)
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    local in_params = false
+    local params_text = {}
+    
+    for _, line in ipairs(lines) do
+        if line == "---" then
+            if not in_params then
+                in_params = true
+            else
+                break
+            end
+        elseif in_params then
+            table.insert(params_text, line)
+        end
+    end
+    
+    -- Try to load the params as Lua code
+    local params_str = table.concat(params_text, "\n")
+    local chunk, err = loadstring("return " .. params_str)
+    if chunk then
+        local success, result = pcall(chunk)
+        if success and result and result.params then
+            return result.params
+        end
+    end
+    return nil
+end
+
 -- Function to send message to Anthropic with retries
 ---@param message Message[] The message to send
 ---@param callback fun(response: table|nil) Callback function to handle the response
 function M.send_to_anthropic(message, callback)
   local curl = require('plenary.curl')
-  local config = require('llmancer.main').config
+  
+  -- Get current params from buffer
+  local bufnr = vim.api.nvim_get_current_buf()
+  local params = parse_params_from_buffer(bufnr) or {
+    model = config.model,
+    max_tokens = config.max_tokens,
+    temperature = config.temperature,
+  }
 
   curl.post('https://api.anthropic.com/v1/messages', {
     headers = {
@@ -66,10 +108,10 @@ function M.send_to_anthropic(message, callback)
       ['content-type'] = 'application/json',
     },
     body = vim.fn.json_encode({
-      model = config.model,
-      max_tokens = config.max_tokens,
+      model = params.model,
+      max_tokens = params.max_tokens,
+      temperature = params.temperature,
       messages = message,
-      temperature = config.temperature,
       system = config.system_prompt,
     }),
     callback = vim.schedule_wrap(function(response)
@@ -211,10 +253,60 @@ local function save_chat(bufnr)
     end
 end
 
+-- Function to build system prompt with current context
+---@return string
+local function build_system_prompt()
+  local chat_bufnr = vim.api.nvim_get_current_buf()
+  local target_bufnr = M.target_buffers[chat_bufnr]
+  local system_context = config.system_prompt
+  
+  -- Only add file context if we have a valid target buffer
+  if target_bufnr and vim.api.nvim_buf_is_valid(target_bufnr) and vim.bo[target_bufnr].buftype == "" then
+    local filename = vim.api.nvim_buf_get_name(target_bufnr)
+    local filetype = vim.bo[target_bufnr].filetype
+    local content = table.concat(vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false), '\n')
+    
+    system_context = string.format([[%s
+
+The user is currently editing a file called '%s' (filetype: %s).
+Here is the text of that file:
+
+%s
+]], config.system_prompt, filename, filetype, content)
+  end
+  
+  return system_context
+end
+
+-- Function to set target buffer for a chat buffer
+---@param chat_bufnr number The chat buffer number
+---@param target_bufnr number|nil The target buffer number (defaults to alternate buffer)
+function M.set_target_buffer(chat_bufnr, target_bufnr)
+  target_bufnr = target_bufnr or vim.fn.bufnr('#')
+  if target_bufnr ~= -1 and vim.api.nvim_buf_is_valid(target_bufnr) then
+    M.target_buffers[chat_bufnr] = target_bufnr
+  end
+end
+
 -- Function to send message (called when pressing Enter)
 function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
   local win = vim.api.nvim_get_current_win()
+
+  -- Initialize history for this buffer if it doesn't exist
+  if not M.chat_history[bufnr] then
+    M.chat_history[bufnr] = {
+      {
+        content = build_system_prompt(),
+        id = generate_id(),
+        opts = { visible = false },
+        role = "system"
+      }
+    }
+  else
+    -- Update the system message with current context
+    M.chat_history[bufnr][1].content = build_system_prompt()
+  end
 
   -- Get current cursor position and line
   local cursor_pos = vim.api.nvim_win_get_cursor(win)
@@ -252,18 +344,6 @@ function M.send_message()
 
   -- Check if we're near the bottom (within last screen of text)
   local is_near_bottom = (total_lines - current_line_num) < window_height
-
-  -- Initialize history for this buffer if it doesn't exist
-  if not M.chat_history[bufnr] then
-    M.chat_history[bufnr] = {
-      {
-        content = config.system_prompt,
-        id = generate_id(),
-        opts = { visible = false },
-        role = "system"
-      }
-    }
-  end
 
   -- Find the highest user message number in the buffer
   local highest_number = 0
@@ -359,6 +439,55 @@ function M.send_message()
   end)
 end
 
+-- Function to create params text
+local function create_params_text()
+    local params_table = {
+        params = {
+            model = config.model,
+            max_tokens = config.max_tokens,
+            temperature = config.temperature,
+        }
+    }
+    -- Convert the table to a string and split it into lines
+    local params_str = vim.inspect(params_table)
+    local params_lines = vim.split(params_str, '\n')
+    
+    -- Return array with separator lines and params lines
+    local result = {"---"}
+    vim.list_extend(result, params_lines)
+    table.insert(result, "---")
+    
+    return result
+end
+
+-- Function to create help text
+local function create_help_text(chat_bufnr)
+    local target_bufnr = M.target_buffers[chat_bufnr]
+    local target_file = target_bufnr and vim.api.nvim_buf_is_valid(target_bufnr) 
+        and vim.api.nvim_buf_get_name(target_bufnr) or "No file selected"
+    
+    -- Combine params and help text
+    local text = create_params_text()
+    vim.list_extend(text, {
+        "",
+        "Welcome to LLMancer.nvim! 🤖",
+        "Currently using: " .. config.model,
+        "Currently editing: " .. target_file,
+        "",
+        "Shortcuts:",
+        "- <Enter> in normal mode: Send message",
+        "- gd: View conversation history",
+        "- gs: View system prompt",
+        "- i or a: Enter insert mode to type",
+        "- <Esc>: Return to normal mode",
+        "",
+        "Type your message below:",
+        "----------------------------------------",
+        "",
+    })
+    return text
+end
+
 -- Function to load chat history
 ---@param chat_id string The ID of the chat to load
 function M.load_chat(chat_id)
@@ -393,20 +522,7 @@ function M.load_chat(chat_id)
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
     
     -- Add the help text
-    local help_text = {
-        "Welcome to LLMancer.nvim! 🤖",
-        "Currently using: " .. config.model,
-        "",
-        "Shortcuts:",
-        "- <Enter> in normal mode: Send message",
-        "- gd: View conversation history",
-        "- i or a: Enter insert mode to type",
-        "- <Esc>: Return to normal mode",
-        "",
-        "Type your message below:",
-        "----------------------------------------",
-        "",
-    }
+    local help_text = create_help_text(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, help_text)
     
     -- Add the chat content after the help text
@@ -471,5 +587,95 @@ function M.load_chat(chat_id)
         table.insert(M.chat_history[bufnr], current_message)
     end
 end
+
+-- Function to show system prompt in a floating window
+local function show_system_prompt()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local system_msg = build_system_prompt()
+  
+  -- Create buffer for system prompt
+  local float_bufnr = vim.api.nvim_create_buf(false, true)
+  
+  -- Set content
+  local lines = vim.split(system_msg, '\n')
+  vim.api.nvim_buf_set_lines(float_bufnr, 0, -1, false, lines)
+  
+  -- Calculate window size and position
+  local width = math.min(120, math.floor(vim.o.columns * 0.8))
+  local height = math.min(30, math.floor(vim.o.lines * 0.8))
+  local col = math.floor((vim.o.columns - width) / 2)
+  local row = math.floor((vim.o.lines - height) / 2)
+  
+  -- Create floating window
+  local win_opts = {
+    relative = 'editor',
+    width = width,
+    height = height,
+    col = col,
+    row = row,
+    anchor = 'NW',
+    style = 'minimal',
+    border = 'rounded',
+    title = 'System Prompt',
+    title_pos = 'center'
+  }
+  
+  local win_id = vim.api.nvim_open_win(float_bufnr, true, win_opts)
+  
+  -- Set buffer options
+  vim.bo[float_bufnr].modifiable = false
+  vim.bo[float_bufnr].buftype = 'nofile'
+  
+  -- Add keymap to close window
+  vim.keymap.set('n', 'q', function()
+    vim.api.nvim_win_close(win_id, true)
+  end, { buffer = float_bufnr, noremap = true })
+  
+  -- Add keymap to close window with <Esc>
+  vim.keymap.set('n', '<Esc>', function()
+    vim.api.nvim_win_close(win_id, true)
+  end, { buffer = float_bufnr, noremap = true })
+end
+
+-- Update the help text to include the new shortcut
+local help_text = {
+    "Welcome to LLMancer.nvim! 🤖",
+    "Currently using: " .. config.model,
+    "",
+    "Shortcuts:",
+    "- <Enter> in normal mode: Send message",
+    "- gd: View conversation history",
+    "- gs: View system prompt",
+    "- i or a: Enter insert mode to type",
+    "- <Esc>: Return to normal mode",
+    "",
+    "Type your message below:",
+    "----------------------------------------",
+    "",
+}
+
+-- Add the keymap in both open_chat and load_chat functions
+local function setup_buffer_mappings(bufnr)
+  -- Existing mappings...
+  vim.api.nvim_buf_set_keymap(bufnr, 'n', '<CR>', 
+    [[<cmd>lua require('llmancer.chat').send_message()<CR>]], 
+    { noremap = true, silent = true })
+  
+  vim.api.nvim_buf_set_keymap(bufnr, 'n', 'gd',
+    [[<cmd>lua require('llmancer.chat').view_conversation()<CR>]],
+    { noremap = true, silent = true })
+    
+  -- Add new mapping for system prompt
+  vim.api.nvim_buf_set_keymap(bufnr, 'n', 'gs',
+    [[<cmd>lua require('llmancer.chat').show_system_prompt()<CR>]],
+    { noremap = true, silent = true, desc = "Show system prompt" })
+end
+
+-- Export the function
+M.show_system_prompt = show_system_prompt
+M.setup_buffer_mappings = setup_buffer_mappings
+
+-- Export the function for use in main.lua
+M.create_help_text = create_help_text
 
 return M
