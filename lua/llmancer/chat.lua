@@ -107,11 +107,17 @@ local function get_latest_user_message()
   local content = {}
   local collecting = false
 
-  -- Find the last "user (n):" line
+  -- Find the last non-empty user message
   local last_user_line = -1
+  local last_user_number = 0
   for i = start_line, #lines do
-    if lines[i]:match("^user %([%d]+%): ") then
-      last_user_line = i
+    local user_num = lines[i]:match("^user %((%d+)%):")
+    if user_num then
+      last_user_number = tonumber(user_num)
+      -- Only update last_user_line if this isn't an empty prompt
+      if not lines[i]:match("^user %([%d]+%):%s*$") then
+        last_user_line = i
+      end
     end
   end
 
@@ -127,7 +133,7 @@ local function get_latest_user_message()
     end
   end
 
-  return table.concat(content, '\n')
+  return table.concat(content, '\n'), last_user_number
 end
 
 -- Function to append response to buffer
@@ -210,14 +216,42 @@ function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
   local win = vim.api.nvim_get_current_win()
 
+  -- Get current cursor position and line
+  local cursor_pos = vim.api.nvim_win_get_cursor(win)
+  local current_line_num = cursor_pos[1]
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+  -- Find the last user prompt line before cursor
+  local last_prompt_line = nil
+  for i = current_line_num, 1, -1 do
+    if lines[i] and lines[i]:match("^user %([%d]+%):%s*$") then
+      last_prompt_line = i
+      break
+    end
+  end
+
+  -- If we're after an empty prompt, don't send
+  if last_prompt_line then
+    -- Check all lines between prompt and cursor for content
+    local has_content = false
+    for i = last_prompt_line, current_line_num do
+      if lines[i] and not lines[i]:match("^%s*$") and not lines[i]:match("^user %([%d]+%):%s*$") then
+        has_content = true
+        break
+      end
+    end
+    if not has_content then
+      return
+    end
+  end
+
   -- Get current window view
-  local current_line = vim.api.nvim_win_get_cursor(win)[1]
   local total_lines = vim.api.nvim_buf_line_count(bufnr)
   local window_height = vim.api.nvim_win_get_height(win)
   local topline = vim.fn.line('w0')
 
   -- Check if we're near the bottom (within last screen of text)
-  local is_near_bottom = (total_lines - current_line) < window_height
+  local is_near_bottom = (total_lines - current_line_num) < window_height
 
   -- Initialize history for this buffer if it doesn't exist
   if not M.chat_history[bufnr] then
@@ -231,14 +265,14 @@ function M.send_message()
     }
   end
 
-  -- Count existing user messages
-  local user_count = 0
-  for _, msg in ipairs(M.chat_history[bufnr]) do
-    if msg.role == "user" then
-      user_count = user_count + 1
+  -- Find the highest user message number in the buffer
+  local highest_number = 0
+  for _, line in ipairs(lines) do
+    local num = line:match("^user %((%d+)%):")
+    if num then
+      highest_number = math.max(highest_number, tonumber(num))
     end
   end
-  user_count = user_count + 1 -- Increment for new message
 
   -- Get only the latest user message
   local content = get_latest_user_message()
@@ -252,6 +286,9 @@ function M.send_message()
   if vim.trim(content) == "" then
     return
   end
+
+  -- Use highest_number + 1 for the new message number
+  local user_count = highest_number + 1
 
   -- Add user message to history
   table.insert(M.chat_history[bufnr], {
@@ -304,7 +341,7 @@ function M.send_message()
       append_to_buffer(response_text, "llm")
 
       -- Add a new blank line and prompt for the next user message
-      local next_prompt = string.format("user (%d): ", user_count + 1)
+      local next_prompt = string.format("user (%d): ", highest_number + 1)
       vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", next_prompt })
 
       -- Move cursor to the end of the prompt line and ensure it's visible
@@ -327,10 +364,16 @@ end
 function M.load_chat(chat_id)
     local file_path = config.storage_dir .. "/" .. chat_id .. ".txt"
     
+    -- Check if file exists
+    if vim.fn.filereadable(file_path) ~= 1 then
+        vim.notify("Chat file not found: " .. file_path, vim.log.levels.ERROR)
+        return
+    end
+    
     -- Read the file content
     local content = vim.fn.readfile(file_path)
-    if not content then
-        vim.notify("Failed to read chat file: " .. file_path, vim.log.levels.ERROR)
+    if not content or #content == 0 then
+        vim.notify("Empty chat file: " .. file_path, vim.log.levels.ERROR)
         return
     end
 
@@ -368,7 +411,9 @@ function M.load_chat(chat_id)
     
     -- Add the chat content after the help text
     local chat_content = vim.list_slice(content, content_start)
-    vim.api.nvim_buf_set_lines(bufnr, #help_text, #help_text, false, chat_content)
+    if #chat_content > 0 then
+        vim.api.nvim_buf_set_lines(bufnr, #help_text, #help_text, false, chat_content)
+    end
     
     -- Initialize chat history
     M.chat_history[bufnr] = {
@@ -384,6 +429,8 @@ function M.load_chat(chat_id)
     local current_message = nil
     for i = #help_text + 1, vim.api.nvim_buf_line_count(bufnr) do
         local line = vim.api.nvim_buf_get_lines(bufnr, i - 1, i, false)[1]
+        if not line then goto continue end
+
         local user_msg = line:match("^user %((%d+)%): (.+)")
         local assistant_msg = line:match("^" .. config.model .. ": (.+)")
         
@@ -394,7 +441,7 @@ function M.load_chat(chat_id)
             end
             -- Start new user message
             current_message = {
-                content = user_msg[2],
+                content = user_msg[2] or "",
                 id = generate_id(),
                 opts = { visible = true },
                 role = "user",
@@ -407,7 +454,7 @@ function M.load_chat(chat_id)
             end
             -- Start new assistant message
             current_message = {
-                content = assistant_msg,
+                content = assistant_msg or "",
                 id = generate_id(),
                 opts = { visible = true },
                 role = "llm"
@@ -416,6 +463,7 @@ function M.load_chat(chat_id)
             -- Append line to current message
             current_message.content = current_message.content .. "\n" .. line
         end
+        ::continue::
     end
     
     -- Add final message if exists

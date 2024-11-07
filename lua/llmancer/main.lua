@@ -198,14 +198,32 @@ function M.list_chats()
             end
         end
         
-        -- Extract timestamp from chat_id
-        local timestamp = chat_id:match("(%d+)_")
-        if not timestamp then return nil end
+        -- Extract timestamp from chat_id (format: YYYYMMDD_HHMMSS_XXXX)
+        local date_str = chat_id:match("^(%d%d%d%d%d%d%d%d_%d%d%d%d%d%d)_")
+        if not date_str then return nil end
+        
+        -- Parse the timestamp (YYYYMMDD_HHMMSS)
+        local year = tonumber(date_str:sub(1,4))
+        local month = tonumber(date_str:sub(5,6))
+        local day = tonumber(date_str:sub(7,8))
+        local hour = tonumber(date_str:sub(10,11))
+        local min = tonumber(date_str:sub(12,13))
+        local sec = tonumber(date_str:sub(14,15))
+        
+        -- Create timestamp using os.time
+        local timestamp = os.time({
+            year = year,
+            month = month,
+            day = day,
+            hour = hour,
+            min = min,
+            sec = sec
+        })
         
         return {
             chat_id = chat_id,
             preview = preview,
-            time = os.date("%Y-%m-%d %H:%M:%S", tonumber(timestamp:sub(1,8)))
+            time = os.date("%Y-%m-%d %H:%M:%S", timestamp)
         }
     end, chat_files)
     

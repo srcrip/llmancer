@@ -85,6 +85,26 @@ local function create_plan_buffer(content)
     local lines = vim.split(HELP_TEXT .. "\n" .. content, "\n")
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 
+    -- Calculate window size and position
+    local width = math.min(120, math.floor(vim.o.columns * 0.8))
+    local height = math.min(30, math.floor(vim.o.lines * 0.8))
+    local col = math.floor((vim.o.columns - width) / 2)
+    local row = math.floor((vim.o.lines - height) / 2)
+
+    -- Create floating window
+    local win_opts = {
+        relative = 'editor',
+        width = width,
+        height = height,
+        col = col,
+        row = row,
+        anchor = 'NW',
+        style = 'minimal',
+        border = 'rounded'
+    }
+    
+    local win_id = vim.api.nvim_open_win(bufnr, true, win_opts)
+
     -- Enable treesitter highlighting for the buffer
     if pcall(require, "nvim-treesitter.configs") then
         vim.cmd([[TSBufEnable highlight]])
@@ -133,9 +153,10 @@ local function create_plan_buffer(content)
         vim.notify("Undid all changes", vim.log.levels.INFO)
     end, opts)
 
-    -- Open buffer in a split
-    vim.cmd('vsplit')
-    vim.api.nvim_set_current_buf(bufnr)
+    -- Add q mapping to close the floating window
+    vim.keymap.set('n', 'q', function()
+        vim.api.nvim_win_close(win_id, true)
+    end, opts)
 
     return bufnr
 end
@@ -429,15 +450,6 @@ function M.create_plan(code_blocks, target_buffers)
       - please try to use the `write` operation the most. When doing so remember to return the entirity of the changed file content.
       - you must always use the available operations. each code block must be either a write block or a replace block. and you must always include the file: and operation: header info.
     ]]
-
-    -- Debug print the entire prompt
-    local debug_buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_name(debug_buf, "LLMancer-Debug-Prompt")
-    vim.api.nvim_buf_set_lines(debug_buf, 0, -1, false, vim.split(prompt, "\n"))
-    vim.cmd("vsplit")
-    vim.api.nvim_set_current_buf(debug_buf)
-    vim.bo[debug_buf].buftype = 'nofile'
-    vim.bo[debug_buf].swapfile = false
 
     -- Send to LLM and create plan buffer
     chat.send_to_anthropic({ { role = "user", content = prompt } }, function(response)
