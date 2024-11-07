@@ -1,0 +1,1 @@
+au BufNewFile,BufRead LLMancer-Plan-* setf llmancer_plan 
