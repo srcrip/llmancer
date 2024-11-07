@@ -32,11 +32,11 @@ end
 local function track_modified_buffer(block_text)
     local first_line = block_text:match("^[^\n]+")
     local filename = first_line and first_line:match("^file:%s*(.-)%s*$")
-    
+
     if filename then
         local abs_path = vim.fn.fnamemodify(filename, ':p')
         local bufnr = vim.fn.bufnr(abs_path)
-        
+
         if bufnr == -1 then
             for _, buf in ipairs(vim.api.nvim_list_bufs()) do
                 local buf_name = vim.api.nvim_buf_get_name(buf)
@@ -46,15 +46,15 @@ local function track_modified_buffer(block_text)
                 end
             end
         end
-        
+
         if bufnr == -1 then
             local dir = vim.fn.fnamemodify(abs_path, ':h')
             vim.fn.mkdir(dir, 'p')
-            
+
             bufnr = vim.fn.bufadd(abs_path)
             vim.fn.bufload(bufnr)
         end
-        
+
         if bufnr ~= -1 then
             modified_buffers[bufnr] = true
         end
@@ -160,7 +160,7 @@ local function apply_block(block_text)
     -- Parse block header
     local in_header = true
     local code_lines = {}
-    
+
     for _, line in ipairs(lines) do
         if in_header then
             -- Parse header fields
@@ -169,10 +169,14 @@ local function apply_block(block_text)
             local start_line = line:match("^start:%s*(%d+)$")
             local end_line = line:match("^end:%s*(%d+)$")
 
-            if filename then block.filename = filename
-            elseif operation then block.operation = operation
-            elseif start_line then block.start = tonumber(start_line)
-            elseif end_line then block.end_line = tonumber(end_line)
+            if filename then
+                block.filename = filename
+            elseif operation then
+                block.operation = operation
+            elseif start_line then
+                block.start = tonumber(start_line)
+            elseif end_line then
+                block.end_line = tonumber(end_line)
             elseif line:match("^```") then
                 in_header = false
             end
@@ -217,10 +221,10 @@ local function apply_block(block_text)
         success = true
     elseif block.operation == "insert" or block.operation == "replace" then
         local line_count = vim.api.nvim_buf_line_count(bufnr)
-        
+
         -- Validate line numbers
         if not block.start or block.start < 1 or block.start > line_count + 1 then
-            vim.notify(string.format("Invalid start line: %d (buffer has %d lines)", 
+            vim.notify(string.format("Invalid start line: %d (buffer has %d lines)",
                 block.start or 0, line_count), vim.log.levels.ERROR)
             return false
         end
@@ -230,7 +234,7 @@ local function apply_block(block_text)
             success = true
         elseif block.operation == "replace" and block.end_line then
             if block.end_line < block.start or block.end_line > line_count then
-                vim.notify(string.format("Invalid end line: %d (buffer has %d lines)", 
+                vim.notify(string.format("Invalid end line: %d (buffer has %d lines)",
                     block.end_line, line_count), vim.log.levels.ERROR)
                 return false
             end
@@ -275,7 +279,7 @@ function M.apply_block_under_cursor(bufnr)
         vim.notify("Applied changes successfully", vim.log.levels.INFO)
         return true
     end
-    
+
     vim.notify("Failed to apply changes", vim.log.levels.ERROR)
     return false
 end
@@ -419,10 +423,11 @@ function M.create_plan(code_blocks, target_buffers)
       Now generate the operations to apply to the files.
 
       REMEMBER:
-      - you are to return only the set of operations, that is, ONLY CODE! nothing that's not code. Don't put anything else outside the blocks besides the whitematter.
+      - you are to return only the set of operations, that is, ONLY CODE! nothing that's not code. Don't put anything else outside the blocks besides the header info.
       - when inserting text, consider the whitespace around the code you'll be inserting. For instance, you may want to have some blank lines in the code block you'll insert if it will result in properly formatted text once inserted.
       - remember to incldue the language at the backticks, e.g. ```javascript because we use it for syntax highlighting.
       - please try to use the `write` operation the most. When doing so remember to return the entirity of the changed file content.
+      - you must always use the available operations. each code block must be either a write block or a replace block. and you must always include the file: and operation: header info.
     ]]
 
     -- Debug print the entire prompt

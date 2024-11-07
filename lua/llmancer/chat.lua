@@ -177,29 +177,32 @@ function M.view_conversation()
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 end
 
--- Function to save chat history
-local function save_chat()
-  local bufnr = vim.api.nvim_get_current_buf()
-  local chat_name = vim.api.nvim_buf_get_name(bufnr)
-  local chat_id = chat_name:match("LLMancer_(.+)$") or chat_name:match("LLMancer%.nvim_(.+)$")
-
-  if chat_id and M.chat_history[bufnr] then
-    local file_path = config.storage_dir .. "/" .. chat_id .. ".json"
-    -- Debug print
-    vim.notify("Saving chat to: " .. file_path)
-
-    local file = io.open(file_path, "w")
-    if file then
-      local json_str = vim.fn.json_encode(M.chat_history[bufnr])
-      file:write(json_str)
-      file:close()
-      vim.notify("Chat saved successfully")
-    else
-      vim.notify("Failed to open file for writing: " .. file_path, vim.log.levels.ERROR)
+-- Update the save_chat function to be more robust
+local function save_chat(bufnr)
+    local chat_name = vim.api.nvim_buf_get_name(bufnr)
+    local chat_id = chat_name:match("LLMancer_(.+)$") or chat_name:match("LLMancer%.nvim_(.+)$")
+    
+    if not chat_id then 
+        vim.notify("Could not extract chat ID from buffer name: " .. chat_name, vim.log.levels.DEBUG)
+        return 
     end
-  else
-    vim.notify("Could not determine chat ID from buffer name: " .. chat_name, vim.log.levels.ERROR)
-  end
+    
+    -- Ensure storage directory exists
+    local storage_dir = config.storage_dir
+    vim.fn.mkdir(storage_dir, "p")
+    
+    local filename = storage_dir .. "/" .. chat_id .. ".txt"
+    
+    -- Get all lines from buffer
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    
+    -- Write to file
+    local success = vim.fn.writefile(lines, filename)
+    if success == 0 then
+        vim.notify("Chat saved to " .. filename, vim.log.levels.DEBUG)
+    else
+        vim.notify("Failed to save chat to " .. filename, vim.log.levels.ERROR)
+    end
 end
 
 -- Function to send message (called when pressing Enter)
@@ -307,11 +310,11 @@ function M.send_message()
       -- Move cursor to the end of the prompt line and ensure it's visible
       local line_count = vim.api.nvim_buf_line_count(bufnr)
       vim.api.nvim_win_set_cursor(win, { line_count, #next_prompt })
-      if is_near_bottom then
-        -- vim.cmd('normal! zz')
-      end
-
-      save_chat()
+      
+      -- Save chat after successful response
+      vim.schedule(function()
+        save_chat(bufnr)
+      end)
     end
 
     -- Stop thinking animation
@@ -322,40 +325,103 @@ end
 -- Function to load chat history
 ---@param chat_id string The ID of the chat to load
 function M.load_chat(chat_id)
-  local file_path = config.storage_dir .. "/" .. chat_id .. ".json"
-  local file = io.open(file_path, "r")
-  if file then
-    local content = file:read("*all")
-    file:close()
+    local file_path = config.storage_dir .. "/" .. chat_id .. ".txt"
+    
+    -- Read the file content
+    local content = vim.fn.readfile(file_path)
+    if not content then
+        vim.notify("Failed to read chat file: " .. file_path, vim.log.levels.ERROR)
+        return
+    end
 
+    -- Get current buffer
     local bufnr = vim.api.nvim_get_current_buf()
-    M.chat_history[bufnr] = vim.fn.json_decode(content)
-
-    -- Reconstruct the chat in the buffer
-    local lines = {}
-    for _, msg in ipairs(M.chat_history[bufnr]) do
-      if msg.role == "user" then
-        table.insert(lines, "")
-        table.insert(lines, string.format("user (%d): %s", msg.message_number, msg.content))
-      elseif msg.role == "llm" then
-        table.insert(lines, "")
-        table.insert(lines, config.model .. ": " .. msg.content)
-      end
+    
+    -- Find where the actual chat content starts in the loaded file
+    local content_start = 1
+    for i, line in ipairs(content) do
+        if line:match("^%-%-%-%-%-%-%-%-%-%-%-%-") then
+            content_start = i + 2  -- Skip the separator line and the blank line after it
+            break
+        end
     end
-
-    -- Add the next user prompt
-    local user_count = 0
-    for _, msg in ipairs(M.chat_history[bufnr]) do
-      if msg.role == "user" then
-        user_count = user_count + 1
-      end
+    
+    -- Clear the buffer first
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
+    
+    -- Add the help text
+    local help_text = {
+        "Welcome to LLMancer.nvim! 🤖",
+        "Currently using: " .. config.model,
+        "",
+        "Shortcuts:",
+        "- <Enter> in normal mode: Send message",
+        "- gd: View conversation history",
+        "- i or a: Enter insert mode to type",
+        "- <Esc>: Return to normal mode",
+        "",
+        "Type your message below:",
+        "----------------------------------------",
+        "",
+    }
+    vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, help_text)
+    
+    -- Add the chat content after the help text
+    local chat_content = vim.list_slice(content, content_start)
+    vim.api.nvim_buf_set_lines(bufnr, #help_text, #help_text, false, chat_content)
+    
+    -- Initialize chat history
+    M.chat_history[bufnr] = {
+        {
+            content = config.system_prompt,
+            id = generate_id(),
+            opts = { visible = false },
+            role = "system"
+        }
+    }
+    
+    -- Parse existing messages to rebuild chat history
+    local current_message = nil
+    for i = #help_text + 1, vim.api.nvim_buf_line_count(bufnr) do
+        local line = vim.api.nvim_buf_get_lines(bufnr, i - 1, i, false)[1]
+        local user_msg = line:match("^user %((%d+)%): (.+)")
+        local assistant_msg = line:match("^" .. config.model .. ": (.+)")
+        
+        if user_msg then
+            -- If we have a previous message, add it to history
+            if current_message then
+                table.insert(M.chat_history[bufnr], current_message)
+            end
+            -- Start new user message
+            current_message = {
+                content = user_msg[2],
+                id = generate_id(),
+                opts = { visible = true },
+                role = "user",
+                message_number = tonumber(user_msg[1])
+            }
+        elseif assistant_msg then
+            -- If we have a previous message, add it to history
+            if current_message then
+                table.insert(M.chat_history[bufnr], current_message)
+            end
+            -- Start new assistant message
+            current_message = {
+                content = assistant_msg,
+                id = generate_id(),
+                opts = { visible = true },
+                role = "llm"
+            }
+        elseif current_message and line ~= "" then
+            -- Append line to current message
+            current_message.content = current_message.content .. "\n" .. line
+        end
     end
-    table.insert(lines, "")
-    table.insert(lines, string.format("user (%d): ", user_count + 1))
-
-    -- Append lines after the help text
-    vim.api.nvim_buf_set_lines(bufnr, 12, -1, false, lines)
-  end
+    
+    -- Add final message if exists
+    if current_message then
+        table.insert(M.chat_history[bufnr], current_message)
+    end
 end
 
 return M

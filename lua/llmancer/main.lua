@@ -172,53 +172,82 @@ end
 
 -- Function to list saved chats using fzf-lua
 function M.list_chats()
-  local fzf = require('fzf-lua')
-  
-  -- Get list of chat files
-  local chat_files = vim.fn.glob(M.config.storage_dir .. "/*.json", false, true)
-  local chats = {}
-  
-  -- Read metadata from each chat file
-  for _, file in ipairs(chat_files) do
-    local chat_id = vim.fn.fnamemodify(file, ':t:r')
-    local content = vim.fn.readfile(file)
-    if #content > 0 then
-      local data = vim.fn.json_decode(content)
-      -- Get first user message as preview
-      local first_msg = ""
-      for _, msg in ipairs(data) do
-        if msg.role == "user" then
-          first_msg = msg.content
-          break
-        end
-      end
-      table.insert(chats, {
-        chat_id = chat_id,
-        preview = first_msg,
-        time = os.date("%Y-%m-%d %H:%M:%S", tonumber(chat_id:match("(%d+)")))
-      })
+    local fzf = require('fzf-lua')
+    
+    -- Get list of chat files
+    local chat_files = vim.fn.glob(M.config.storage_dir .. "/*.txt", false, true)
+    if #chat_files == 0 then
+        vim.notify("No saved chats found", vim.log.levels.INFO)
+        return
     end
-  end
-  
-  -- Show chats in fzf
-  fzf.fzf_exec(
-    vim.tbl_map(function(chat)
-      return string.format("[%s] %s", chat.time, chat.preview:sub(1, 50))
-    end, chats),
-    {
-      actions = {
-        ['default'] = function(selected)
-          local chat_id = chats[selected[1]:match("%[([^%]]+)%]")].chat_id
-          M.open_chat(chat_id)
+    
+    -- Read preview from each chat file
+    local chats = vim.tbl_map(function(file)
+        local chat_id = vim.fn.fnamemodify(file, ':t:r')
+        local lines = vim.fn.readfile(file, '', 50)
+        local preview = ""
+        
+        -- Find first user message after help text
+        local found_separator = false
+        for _, line in ipairs(lines) do
+            if not found_separator and line:match("^%-%-%-%-%-%-%-%-%-%-%-%-") then
+                found_separator = true
+            elseif found_separator and line ~= "" then
+                preview = line
+                break
+            end
         end
-      },
-      prompt = "Select chat > ",
-      winopts = {
-        height = 0.6,
-        width = 0.9,
-      }
-    }
-  )
+        
+        -- Extract timestamp from chat_id
+        local timestamp = chat_id:match("(%d+)_")
+        if not timestamp then return nil end
+        
+        return {
+            chat_id = chat_id,
+            preview = preview,
+            time = os.date("%Y-%m-%d %H:%M:%S", tonumber(timestamp:sub(1,8)))
+        }
+    end, chat_files)
+    
+    -- Filter out any nil entries and sort by time
+    chats = vim.tbl_filter(function(chat) return chat ~= nil end, chats)
+    table.sort(chats, function(a, b) return a.time > b.time end)
+    
+    -- Format entries for fzf
+    local entries = vim.tbl_map(function(chat)
+        local preview_text = chat.preview:sub(1, 100)
+        if #chat.preview > 100 then
+            preview_text = preview_text .. "..."
+        end
+        return {
+            display = string.format("[%s] %s", chat.time, preview_text),
+            chat_id = chat.chat_id
+        }
+    end, chats)
+    
+    -- Show chats in fzf
+    fzf.fzf_exec(
+        vim.tbl_map(function(entry) return entry.display end, entries),
+        {
+            actions = {
+                ['default'] = function(selected)
+                    if selected and selected[1] then
+                        for _, entry in ipairs(entries) do
+                            if entry.display == selected[1] then
+                                M.open_chat(entry.chat_id)
+                                break
+                            end
+                        end
+                    end
+                end
+            },
+            prompt = "Select chat > ",
+            winopts = {
+                height = 0.6,
+                width = 0.9,
+            }
+        }
+    )
 end
 
 -- Add this near the top with other local functions
@@ -267,70 +296,14 @@ end
 M.create_thinking_indicator = create_thinking_indicator
 
 -- Function to load a chat history
-local function load_chat_history(selected)
-    if not selected or #selected == 0 then return end
-    
-    local filename = selected[1]
-    -- Ensure we have a valid filename
-    if not filename or filename == "" then
-        vim.notify("Invalid chat file selected", vim.log.levels.ERROR)
-        return
-    }
-
-    -- Read the file content
-    local content = vim.fn.readfile(filename)
-    if not content or #content == 0 then
-        vim.notify("Empty chat file", vim.log.levels.ERROR)
-        return
-    }
-
-    -- Parse the JSON content
-    local ok, chat_data = pcall(vim.json.decode, table.concat(content, "\n"))
-    if not ok or not chat_data then
-        vim.notify("Failed to parse chat history", vim.log.levels.ERROR)
-        return
-    }
-
-    -- Create a new chat buffer
-    local bufnr = create_chat_buffer()
-    if not bufnr then
-        vim.notify("Failed to create chat buffer", vim.log.levels.ERROR)
-        return
-    }
-
-    -- Initialize chat history for the buffer
-    chat.chat_history[bufnr] = chat_data
-
-    -- Display the chat history
-    display_chat_history(bufnr)
-end
-
--- Function to display chat history in buffer
-local function display_chat_history(bufnr)
-    if not bufnr or not chat.chat_history[bufnr] then return end
-
-    local lines = {}
-    for _, msg in ipairs(chat.chat_history[bufnr]) do
-        if msg.role == "user" then
-            table.insert(lines, "User: " .. msg.content)
-        elseif msg.role == "assistant" then
-            table.insert(lines, "Assistant: " .. msg.content)
-        end
-        table.insert(lines, "") -- Add empty line between messages
-    end
-
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-end
-
--- Function to list and load chat histories
 function M.load_chat()
     local chat_dir = vim.fn.stdpath("data") .. "/llmancer/chats"
     
     -- Ensure the directory exists
     vim.fn.mkdir(chat_dir, "p")
 
-    -- Get list of chat files
-    local files = vim.fn.globpath(chat_dir, "*.json", false, true)
+    -- Get list of chat files (now looking for .txt instead of .json)
+    local files = vim.fn.globpath(chat_dir, "*.txt", false, true)
     if #files == 0 then
         vim.notify("No chat histories found", vim.log.levels.INFO)
         return
@@ -339,26 +312,42 @@ function M.load_chat()
     -- Format files for display
     local formatted_files = {}
     for _, file in ipairs(files) do
+        -- Read first few lines of the file for preview
+        local lines = vim.fn.readfile(file, "", 5)  -- Read up to 5 lines
+        local preview = table.concat(lines, " "):sub(1, 50) -- First 50 chars
         local display_name = vim.fn.fnamemodify(file, ":t:r")
         table.insert(formatted_files, {
-            display_name,
+            string.format("[%s] %s...", display_name, preview),
             file
         })
     end
 
     -- Show file picker
     require('fzf-lua').fzf_exec(
-        formatted_files,
+        vim.tbl_map(function(entry) return entry[1] end, formatted_files),
         {
             prompt = "Select Chat History > ",
             actions = {
                 ['default'] = function(selected)
-                    load_chat_history(selected)
+                    if not selected or #selected == 0 then return end
+                    local idx = 1
+                    for i, entry in ipairs(formatted_files) do
+                        if entry[1] == selected[1] then
+                            idx = i
+                            break
+                        end
+                    end
+                    local filename = formatted_files[idx][2]
+                    
+                    -- Create new chat buffer
+                    local chat_id = vim.fn.fnamemodify(filename, ":t:r")
+                    local bufnr = M.open_chat(chat_id)
+                    
+                    -- Read and display the chat content
+                    local content = vim.fn.readfile(filename)
+                    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, content)
                 end
-            },
-            fn_transform = function(x)
-                return x[1] -- Show only the display name
-            end
+            }
         }
     )
 end
