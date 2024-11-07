@@ -266,4 +266,101 @@ end
 -- Export the function
 M.create_thinking_indicator = create_thinking_indicator
 
+-- Function to load a chat history
+local function load_chat_history(selected)
+    if not selected or #selected == 0 then return end
+    
+    local filename = selected[1]
+    -- Ensure we have a valid filename
+    if not filename or filename == "" then
+        vim.notify("Invalid chat file selected", vim.log.levels.ERROR)
+        return
+    }
+
+    -- Read the file content
+    local content = vim.fn.readfile(filename)
+    if not content or #content == 0 then
+        vim.notify("Empty chat file", vim.log.levels.ERROR)
+        return
+    }
+
+    -- Parse the JSON content
+    local ok, chat_data = pcall(vim.json.decode, table.concat(content, "\n"))
+    if not ok or not chat_data then
+        vim.notify("Failed to parse chat history", vim.log.levels.ERROR)
+        return
+    }
+
+    -- Create a new chat buffer
+    local bufnr = create_chat_buffer()
+    if not bufnr then
+        vim.notify("Failed to create chat buffer", vim.log.levels.ERROR)
+        return
+    }
+
+    -- Initialize chat history for the buffer
+    chat.chat_history[bufnr] = chat_data
+
+    -- Display the chat history
+    display_chat_history(bufnr)
+end
+
+-- Function to display chat history in buffer
+local function display_chat_history(bufnr)
+    if not bufnr or not chat.chat_history[bufnr] then return end
+
+    local lines = {}
+    for _, msg in ipairs(chat.chat_history[bufnr]) do
+        if msg.role == "user" then
+            table.insert(lines, "User: " .. msg.content)
+        elseif msg.role == "assistant" then
+            table.insert(lines, "Assistant: " .. msg.content)
+        end
+        table.insert(lines, "") -- Add empty line between messages
+    end
+
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+end
+
+-- Function to list and load chat histories
+function M.load_chat()
+    local chat_dir = vim.fn.stdpath("data") .. "/llmancer/chats"
+    
+    -- Ensure the directory exists
+    vim.fn.mkdir(chat_dir, "p")
+
+    -- Get list of chat files
+    local files = vim.fn.globpath(chat_dir, "*.json", false, true)
+    if #files == 0 then
+        vim.notify("No chat histories found", vim.log.levels.INFO)
+        return
+    end
+
+    -- Format files for display
+    local formatted_files = {}
+    for _, file in ipairs(files) do
+        local display_name = vim.fn.fnamemodify(file, ":t:r")
+        table.insert(formatted_files, {
+            display_name,
+            file
+        })
+    end
+
+    -- Show file picker
+    require('fzf-lua').fzf_exec(
+        formatted_files,
+        {
+            prompt = "Select Chat History > ",
+            actions = {
+                ['default'] = function(selected)
+                    load_chat_history(selected)
+                end
+            },
+            fn_transform = function(x)
+                return x[1] -- Show only the display name
+            end
+        }
+    )
+end
+
 return M

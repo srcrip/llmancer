@@ -16,9 +16,13 @@ local modified_buffers = {}
 local function save_modified_buffers()
     for bufnr, _ in pairs(modified_buffers) do
         if vim.api.nvim_buf_is_valid(bufnr) then
-            vim.api.nvim_buf_call(bufnr, function()
-                vim.cmd('write')
-            end)
+            vim.fn.bufload(bufnr)
+            local line_count = vim.api.nvim_buf_line_count(bufnr)
+            if line_count > 0 then
+                vim.api.nvim_buf_call(bufnr, function()
+                    vim.cmd('write')
+                end)
+            end
         end
     end
     modified_buffers = {}
@@ -26,9 +30,31 @@ end
 
 -- Function to track modified buffer
 local function track_modified_buffer(block_text)
-    local filename = block_text:match("^file:%s*(.+)[\r\n]")
+    local first_line = block_text:match("^[^\n]+")
+    local filename = first_line and first_line:match("^file:%s*(.-)%s*$")
+    
     if filename then
-        local bufnr = vim.fn.bufnr(filename)
+        local abs_path = vim.fn.fnamemodify(filename, ':p')
+        local bufnr = vim.fn.bufnr(abs_path)
+        
+        if bufnr == -1 then
+            for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+                local buf_name = vim.api.nvim_buf_get_name(buf)
+                if buf_name == abs_path then
+                    bufnr = buf
+                    break
+                end
+            end
+        end
+        
+        if bufnr == -1 then
+            local dir = vim.fn.fnamemodify(abs_path, ':h')
+            vim.fn.mkdir(dir, 'p')
+            
+            bufnr = vim.fn.bufadd(abs_path)
+            vim.fn.bufload(bufnr)
+        end
+        
         if bufnr ~= -1 then
             modified_buffers[bufnr] = true
         end
@@ -87,7 +113,11 @@ local function create_plan_buffer(content)
     -- Apply all blocks and save
     vim.keymap.set('n', 'A', function()
         M.apply_all_blocks(bufnr)
-        save_modified_buffers()
+        -- Add a small delay to ensure all buffer modifications are complete
+        vim.defer_fn(function()
+            save_modified_buffers()
+            vim.notify("Saved all modified buffers", vim.log.levels.INFO)
+        end, 100)
     end, opts)
 
     -- Undo all changes
@@ -112,159 +142,142 @@ end
 
 -- Function to apply a single block of changes
 ---@param block_text string The text of the block to apply
+---@return boolean success Whether the changes were applied successfully
 local function apply_block(block_text)
-    local lines = vim.split(block_text, "\n")
-    local block = {}
-
-    -- Parse block header
-    for _, line in ipairs(lines) do
-        -- Update patterns to handle filename format
-        local filename = line:match("^file:%s*(.+)$")
-        if filename then block.filename = filename end
-
-        local operation = line:match("^operation:%s*(%w+)$")
-        if operation then block.operation = operation end
-
-        local start_line = line:match("^start:%s*(%d+)$")
-        if start_line then block.start = tonumber(start_line) end
-
-        local end_line = line:match("^end:%s*(%d+)$")
-        if end_line then block.end_line = tonumber(end_line) end
-
-        if line:match("^```") then break end
-    end
-
-    -- Extract code
-    local code_lines = {}
-    local in_code = false
-    for _, line in ipairs(lines) do
-        if line:match("^```") then
-            in_code = not in_code
-        elseif in_code then
-            table.insert(code_lines, line)
-        end
-    end
-
-    -- Debug print
-    vim.notify(string.format(
-        "Applying block: file=%s, operation=%s, start=%s, end=%s, code_lines=%d",
-        tostring(block.filename),
-        tostring(block.operation),
-        tostring(block.start),
-        tostring(block.end_line),
-        #code_lines
-    ))
-
-    -- Apply changes based on operation
-    if block.filename and block.operation then
-        -- Find or create buffer for the file
-        local bufnr = vim.fn.bufnr(block.filename)
-        if bufnr == -1 then
-            -- If file exists on disk but not in buffer
-            if vim.fn.filereadable(block.filename) == 1 then
-                bufnr = vim.fn.bufadd(block.filename)
-                vim.fn.bufload(bufnr)
-            else
-                -- Create new file
-                bufnr = vim.api.nvim_create_buf(true, false)
-                vim.api.nvim_buf_set_name(bufnr, block.filename)
-            end
-        end
-
-        if not vim.api.nvim_buf_is_valid(bufnr) then
-            vim.notify("Invalid buffer for file: " .. block.filename, vim.log.levels.ERROR)
-            return false
-        end
-
-        local success = false
-        if block.operation == "write" then
-            -- For write, we replace the entire file contents
-            vim.api.nvim_buf_set_lines(
-                bufnr,
-                0,
-                -1,
-                false,
-                code_lines
-            )
-            success = true
-        elseif block.start then -- Only check line numbers for insert/replace operations
-            -- Get buffer line count for validation
-            local line_count = vim.api.nvim_buf_line_count(bufnr)
-
-            -- Validate line numbers
-            if block.start < 1 or block.start > line_count + 1 then
-                vim.notify(string.format("Invalid start line: %d (buffer has %d lines)", block.start, line_count),
-                    vim.log.levels.ERROR)
-                return false
-            end
-
-            if block.operation == "insert" then
-                -- For insert, we insert AFTER the start line
-                vim.api.nvim_buf_set_lines(
-                    bufnr,
-                    block.start,
-                    block.start,
-                    false,
-                    code_lines
-                )
-                success = true
-            elseif block.operation == "replace" and block.end_line then
-                -- Validate end line for replace operation
-                if block.end_line < block.start or block.end_line > line_count then
-                    vim.notify(string.format("Invalid end line: %d (buffer has %d lines)", block.end_line, line_count),
-                        vim.log.levels.ERROR)
-                    return false
-                end
-
-                -- For replace, we need both start and end lines
-                vim.api.nvim_buf_set_lines(
-                    bufnr,
-                    block.start - 1,
-                    block.end_line,
-                    false,
-                    code_lines
-                )
-                success = true
-            end
-        end
-
-        -- Track modified buffer if operation succeeds
-        if success then
-            track_modified_buffer(block_text)
-            return true
-        end
-
-        vim.notify("Invalid operation: " .. (block.operation or "nil"), vim.log.levels.ERROR)
+    if not block_text or block_text == "" then
+        vim.notify("Empty block text", vim.log.levels.ERROR)
         return false
     end
 
-    vim.notify("Missing required fields in block", vim.log.levels.ERROR)
+    local lines = vim.split(block_text, "\n")
+    local block = {
+        filename = nil,
+        operation = nil,
+        start = nil,
+        end_line = nil
+    }
+
+    -- Parse block header
+    local in_header = true
+    local code_lines = {}
+    
+    for _, line in ipairs(lines) do
+        if in_header then
+            -- Parse header fields
+            local filename = line:match("^file:%s*(.+)$")
+            local operation = line:match("^operation:%s*(%w+)$")
+            local start_line = line:match("^start:%s*(%d+)$")
+            local end_line = line:match("^end:%s*(%d+)$")
+
+            if filename then block.filename = filename
+            elseif operation then block.operation = operation
+            elseif start_line then block.start = tonumber(start_line)
+            elseif end_line then block.end_line = tonumber(end_line)
+            elseif line:match("^```") then
+                in_header = false
+            end
+        else
+            -- Collect code lines, skipping the closing backticks
+            if not line:match("^```") then
+                table.insert(code_lines, line)
+            end
+        end
+    end
+
+    -- Validate required fields
+    if not (block.filename and block.operation) then
+        vim.notify("Missing required fields in block", vim.log.levels.ERROR)
+        return false
+    end
+
+    -- Find or create buffer
+    local bufnr = vim.fn.bufnr(block.filename)
+    if bufnr == -1 then
+        if vim.fn.filereadable(block.filename) == 1 then
+            bufnr = vim.fn.bufadd(block.filename)
+            vim.fn.bufload(bufnr)
+        else
+            -- Create new file and its directory
+            local dir = vim.fn.fnamemodify(block.filename, ':h')
+            vim.fn.mkdir(dir, 'p')
+            bufnr = vim.api.nvim_create_buf(true, false)
+            vim.api.nvim_buf_set_name(bufnr, block.filename)
+        end
+    end
+
+    if not vim.api.nvim_buf_is_valid(bufnr) then
+        vim.notify("Invalid buffer for file: " .. block.filename, vim.log.levels.ERROR)
+        return false
+    end
+
+    -- Apply changes based on operation
+    local success = false
+    if block.operation == "write" then
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, code_lines)
+        success = true
+    elseif block.operation == "insert" or block.operation == "replace" then
+        local line_count = vim.api.nvim_buf_line_count(bufnr)
+        
+        -- Validate line numbers
+        if not block.start or block.start < 1 or block.start > line_count + 1 then
+            vim.notify(string.format("Invalid start line: %d (buffer has %d lines)", 
+                block.start or 0, line_count), vim.log.levels.ERROR)
+            return false
+        end
+
+        if block.operation == "insert" then
+            vim.api.nvim_buf_set_lines(bufnr, block.start, block.start, false, code_lines)
+            success = true
+        elseif block.operation == "replace" and block.end_line then
+            if block.end_line < block.start or block.end_line > line_count then
+                vim.notify(string.format("Invalid end line: %d (buffer has %d lines)", 
+                    block.end_line, line_count), vim.log.levels.ERROR)
+                return false
+            end
+            vim.api.nvim_buf_set_lines(bufnr, block.start - 1, block.end_line, false, code_lines)
+            success = true
+        end
+    end
+
+    if success then
+        track_modified_buffer(block_text)
+        return true
+    end
+
+    vim.notify("Invalid operation: " .. block.operation, vim.log.levels.ERROR)
     return false
 end
 
 -- Function to apply block under cursor
 ---@param bufnr number Buffer number of the plan buffer
+---@return boolean success Whether the block was applied successfully
 function M.apply_block_under_cursor(bufnr)
+    if not vim.api.nvim_buf_is_valid(bufnr) then
+        vim.notify("Invalid plan buffer", vim.log.levels.ERROR)
+        return false
+    end
+
     local cursor = vim.api.nvim_win_get_cursor(0)
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     local start_line = cursor[1]
     local end_line = cursor[1]
 
     -- Find block boundaries
-    while start_line > 1 and not lines[start_line - 1]:match("^buffer:") do
+    while start_line > 1 and not lines[start_line - 1]:match("^file:") do
         start_line = start_line - 1
     end
-    while end_line < #lines and not (lines[end_line + 1]:match("^buffer:") or lines[end_line + 1]:match("^%-%-%-%-")) do
+    while end_line < #lines and not lines[end_line + 1]:match("^file:") do
         end_line = end_line + 1
     end
 
-    -- Apply the block
     local block_text = table.concat(vim.list_slice(lines, start_line, end_line), "\n")
     if apply_block(block_text) then
         vim.notify("Applied changes successfully", vim.log.levels.INFO)
-    else
-        vim.notify("Failed to apply changes", vim.log.levels.ERROR)
+        return true
     end
+    
+    vim.notify("Failed to apply changes", vim.log.levels.ERROR)
+    return false
 end
 
 -- Function to apply all blocks
