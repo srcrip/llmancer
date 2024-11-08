@@ -164,18 +164,30 @@ local function get_latest_user_message()
     return "", nil
   end
 
-  -- Find the last user message
+  -- Find the last user message by scanning backwards from the end
   local in_message = false
+  local last_user_num = nil
+  
+  -- Count total user messages to determine message number
+  local user_message_count = 0
+  for i = separator_line, #lines do
+    if lines[i]:match("^user %((%d+)%)") then
+      user_message_count = user_message_count + 1
+    end
+  end
+
+  -- Scan backwards to find last message
   for i = #lines, separator_line, -1 do
     local line = lines[i]
-
-    -- Check for user message start
     local user_num = line:match("^user %((%d+)%):")
+
     if user_num then
-      message_number = tonumber(user_num)
-      -- Skip empty prompts
-      if not line:match("^user %([%d]+%):%s*$") then
+      -- Found a user message
+      if not last_user_num then
+        last_user_num = tonumber(user_num)
+        message_number = user_message_count + 1
         in_message = true
+        
         -- Add everything after the "user (N):" prefix
         local msg_content = line:match("^user %([%d]+%):%s*(.*)$")
         if msg_content and msg_content ~= "" then
@@ -201,11 +213,9 @@ local function get_latest_user_message()
         table.insert(content, line)
       end
     end
+    -- This is the first message
+    message_number = 1
   end
-
-  -- For debugging
-  vim.notify("Content: " .. vim.inspect(content))
-  vim.notify("Message number: " .. (message_number or "nil"))
 
   return table.concat(content, '\n'), message_number
 end
@@ -462,7 +472,11 @@ function M.send_message()
   end
 
   -- Get latest user message
-  local content, message_number = get_latest_user_message()
+  local ok, content, message_number = pcall(get_latest_user_message)
+  if not ok then
+    vim.notify("Error getting user message: " .. tostring(content), vim.log.levels.ERROR)
+    return
+  end
 
   -- Skip if content is empty
   if vim.trim(content) == "" then
@@ -472,8 +486,6 @@ function M.send_message()
   -- If no message number found, this is the first message
   if not message_number then
     message_number = 1
-  else
-    message_number = message_number + 1
   end
 
   -- Get params and build context from files
