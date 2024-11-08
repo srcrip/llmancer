@@ -89,11 +89,9 @@ local function parse_params_from_buffer(bufnr)
   return nil
 end
 
--- Update the send_to_anthropic function to handle the new structure
+-- Update the send_to_anthropic function to handle streaming
 function M.send_to_anthropic(message, callback)
-  local curl = require('plenary.curl')
-
-  -- Get current params from buffer
+  local Job = require('plenary.job')
   local bufnr = vim.api.nvim_get_current_buf()
   local config_table = parse_params_from_buffer(bufnr)
   local params = (config_table and config_table.params) or {
@@ -105,33 +103,100 @@ function M.send_to_anthropic(message, callback)
   -- Build system prompt
   local system = M.build_system_prompt()
 
-  curl.post('https://api.anthropic.com/v1/messages', {
-    headers = {
-      ['x-api-key'] = config.anthropic_api_key,
-      ['anthropic-version'] = '2023-06-01',
-      ['content-type'] = 'application/json',
+  -- Track the accumulated response
+  local accumulated_text = ""
+  local response_started = false
+  local message_number = message[1] and message[1].message_number
+
+  -- Prepare request body
+  local body = vim.fn.json_encode({
+    model = params.model,
+    max_tokens = params.max_tokens,
+    temperature = params.temperature,
+    messages = message,
+    system = system,
+    stream = true,
+  })
+
+  local job = Job:new({
+    command = 'curl',
+    args = {
+      'https://api.anthropic.com/v1/messages',
+      '-X', 'POST',
+      '-H', 'x-api-key: ' .. config.anthropic_api_key,
+      '-H', 'anthropic-version: 2023-06-01',
+      '-H', 'content-type: application/json',
+      '-H', 'accept: text/event-stream',
+      '-d', body,
+      '--no-buffer',
     },
-    body = vim.fn.json_encode({
-      model = params.model,
-      max_tokens = params.max_tokens,
-      temperature = params.temperature,
-      messages = message,
-      system = system,
-    }),
-    callback = vim.schedule_wrap(function(response)
-      if response.status == 200 then
-        callback(vim.fn.json_decode(response.body))
-      else
-        local error_data = vim.fn.json_decode(response.body)
-        if error_data and error_data.error and error_data.error.type == "overloaded_error" then
-          callback(nil) -- Signal retry needed
-        else
-          vim.notify('Error from Anthropic API: ' .. response.body, vim.log.levels.ERROR)
-          callback(false) -- Signal permanent failure
+    on_stdout = vim.schedule_wrap(function(_, chunk)
+      if not response_started then
+        -- Add the model prefix only once at the start
+        vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { config.model .. ": " })
+        response_started = true
+      end
+
+      if chunk then
+        -- Look for data: lines
+        local data = chunk:match("^data: (.+)")
+        if data and data ~= "[DONE]" then
+          local ok, content_delta = pcall(vim.fn.json_decode, data)
+          if ok and content_delta and content_delta.delta and content_delta.delta.text then
+            local new_text = content_delta.delta.text
+            accumulated_text = accumulated_text .. new_text
+
+            -- Split accumulated text into lines
+            local lines = vim.split(accumulated_text, "\n", { plain = true })
+            
+            -- Update the buffer with new content
+            local buf_line_count = vim.api.nvim_buf_line_count(bufnr)
+            local last_line = vim.api.nvim_buf_get_lines(bufnr, buf_line_count - 1, buf_line_count, false)[1]
+
+            if #lines == 1 then
+              -- Single line update
+              vim.api.nvim_buf_set_lines(bufnr, buf_line_count - 1, buf_line_count, false, { last_line .. lines[1] })
+              accumulated_text = ""
+            else
+              -- Multiple lines
+              vim.api.nvim_buf_set_lines(bufnr, buf_line_count - 1, buf_line_count, false, 
+                { last_line .. lines[1] })
+              if #lines > 2 then
+                vim.api.nvim_buf_set_lines(bufnr, buf_line_count, buf_line_count, false, 
+                  vim.list_slice(lines, 2, #lines - 1))
+              end
+              accumulated_text = lines[#lines]
+            end
+          end
+        elseif data == "[DONE]" then
+          -- Stream is complete
+          -- Add a blank line and next user prompt after completion
+          local next_prompt = string.format("\nuser (%d): ", (message_number or 0) + 1)
+          vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", next_prompt })
+          
+          -- Move cursor to the end
+          local line_count = vim.api.nvim_buf_line_count(bufnr)
+          vim.api.nvim_win_set_cursor(0, { line_count, #next_prompt })
+
+          -- Call the callback with the final response
+          if callback then
+            callback({ content = { { text = accumulated_text } } })
+          end
         end
       end
-    end)
+    end),
+    on_exit = function(j, return_val)
+      if return_val ~= 0 then
+        vim.notify("Error in API request", vim.log.levels.ERROR)
+        if callback then
+          callback(nil)
+        end
+      end
+    end,
   })
+
+  job:start()
+  return job -- Return job handle for potential cancellation
 end
 
 -- Function to get buffer content as message
