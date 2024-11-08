@@ -11,6 +11,7 @@
 ---@field view_conversation fun() Function to view the conversation
 ---@field send_to_anthropic fun(message: Message[], callback: fun(response: table|nil)) Function to send message to Anthropic
 ---@field target_buffers table<number, number> Map of chat bufnr to target bufnr
+---@field build_system_prompt fun():string Function to build system prompt with current context
 local M = {}
 
 local config = require('llmancer.main').config
@@ -140,42 +141,70 @@ end
 
 -- Function to get the latest user message from buffer
 ---@return string content The latest user message
+---@return number|nil message_number The message number
 local function get_latest_user_message()
   local bufnr = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-
-  -- Skip the help text (first 12 lines)
-  local start_line = 12
   local content = {}
-  local collecting = false
+  local message_number = nil
+  local separator_line = nil
 
-  -- Find the last non-empty user message
-  local last_user_line = -1
-  local last_user_number = 0
-  for i = start_line, #lines do
-    local user_num = lines[i]:match("^user %((%d+)%):")
-    if user_num then
-      last_user_number = tonumber(user_num)
-      -- Only update last_user_line if this isn't an empty prompt
-      if not lines[i]:match("^user %([%d]+%):%s*$") then
-        last_user_line = i
-      end
+  -- First, find the separator line
+  for i, line in ipairs(lines) do
+    if line:match("^%-%-%-%-%-%-%-%-%-%-%-%-") then
+      separator_line = i
+      break
     end
   end
 
-  -- If we found a user line, collect everything after it until the next prefix
-  if last_user_line > -1 then
-    for i = last_user_line + 1, #lines do
-      local line = lines[i]
-      -- Stop if we hit another prefix or empty line
-      if line:match("^[^:]+: ") or line == "" then
+  if not separator_line then
+    return "", nil
+  end
+
+  -- Find the last user message
+  local in_message = false
+  for i = #lines, separator_line, -1 do
+    local line = lines[i]
+    
+    -- Check for user message start
+    local user_num = line:match("^user %((%d+)%):")
+    if user_num then
+      message_number = tonumber(user_num)
+      -- Skip empty prompts
+      if not line:match("^user %([%d]+%):%s*$") then
+        in_message = true
+        -- Add everything after the "user (N):" prefix
+        local msg_content = line:match("^user %([%d]+%):%s*(.*)$")
+        if msg_content and msg_content ~= "" then
+          table.insert(content, 1, msg_content)
+        end
+      end
+    elseif in_message then
+      -- Stop if we hit another message
+      if line:match("^[^:]+:") then
         break
       end
-      table.insert(content, line)
+      -- Add the line to our message
+      table.insert(content, 1, line)
     end
   end
 
-  return table.concat(content, '\n'), last_user_number
+  -- If we haven't found a message yet, look for content after the separator
+  if #content == 0 then
+    for i = separator_line + 1, #lines do
+      local line = lines[i]
+      -- Skip empty lines and prompts
+      if line ~= "" and not line:match("^user %([%d]+%):%s*$") and not line:match("^[^:]+:") then
+        table.insert(content, line)
+      end
+    end
+  end
+
+  -- For debugging
+  vim.notify("Content: " .. vim.inspect(content))
+  vim.notify("Message number: " .. (message_number or "nil"))
+
+  return table.concat(content, '\n'), message_number
 end
 
 -- Function to append response to buffer
@@ -255,24 +284,25 @@ end
 
 -- Function to build system prompt with current context
 ---@return string
-local function build_system_prompt()
+function M.build_system_prompt()
   local chat_bufnr = vim.api.nvim_get_current_buf()
   local target_bufnr = M.target_buffers[chat_bufnr]
-  local system_context = config.system_prompt
+  local system_context = config.system_prompt or "You are a helpful AI assistant."
   
   -- Only add file context if we have a valid target buffer
-  if target_bufnr and vim.api.nvim_buf_is_valid(target_bufnr) and vim.bo[target_bufnr].buftype == "" then
+  if target_bufnr and vim.api.nvim_buf_is_valid(target_bufnr) then
     local filename = vim.api.nvim_buf_get_name(target_bufnr)
-    local filetype = vim.bo[target_bufnr].filetype
+    local filetype = vim.bo[target_bufnr].filetype or "unknown"
     local content = table.concat(vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false), '\n')
     
-    system_context = string.format([[%s
+    if filename ~= "" then
+      system_context = string.format([[%s
 
 The user is currently editing a file called '%s' (filetype: %s).
 Here is the text of that file:
 
-%s
-]], config.system_prompt, filename, filetype, content)
+%s]], system_context, filename, filetype, content)
+    end
   end
   
   return system_context
@@ -288,6 +318,31 @@ function M.set_target_buffer(chat_bufnr, target_bufnr)
   end
 end
 
+-- Function to get file context
+---@return string
+local function get_file_context()
+  local chat_bufnr = vim.api.nvim_get_current_buf()
+  local target_bufnr = M.target_buffers[chat_bufnr]
+  
+  if target_bufnr and vim.api.nvim_buf_is_valid(target_bufnr) then
+    local filename = vim.api.nvim_buf_get_name(target_bufnr)
+    local filetype = vim.bo[target_bufnr].filetype or "unknown"
+    local content = table.concat(vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false), '\n')
+    
+    if filename ~= "" then
+      return string.format([[Currently editing: %s (filetype: %s)
+
+Here is the content of the file:
+
+%s
+
+]], filename, filetype, content)
+    end
+  end
+  
+  return ""
+end
+
 -- Function to send message (called when pressing Enter)
 function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
@@ -297,86 +352,39 @@ function M.send_message()
   if not M.chat_history[bufnr] then
     M.chat_history[bufnr] = {
       {
-        content = build_system_prompt(),
+        content = config.system_prompt,
         id = generate_id(),
         opts = { visible = false },
         role = "system"
       }
     }
-  else
-    -- Update the system message with current context
-    M.chat_history[bufnr][1].content = build_system_prompt()
   end
 
-  -- Get current cursor position and line
-  local cursor_pos = vim.api.nvim_win_get_cursor(win)
-  local current_line_num = cursor_pos[1]
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-
-  -- Find the last user prompt line before cursor
-  local last_prompt_line = nil
-  for i = current_line_num, 1, -1 do
-    if lines[i] and lines[i]:match("^user %([%d]+%):%s*$") then
-      last_prompt_line = i
-      break
-    end
-  end
-
-  -- If we're after an empty prompt, don't send
-  if last_prompt_line then
-    -- Check all lines between prompt and cursor for content
-    local has_content = false
-    for i = last_prompt_line, current_line_num do
-      if lines[i] and not lines[i]:match("^%s*$") and not lines[i]:match("^user %([%d]+%):%s*$") then
-        has_content = true
-        break
-      end
-    end
-    if not has_content then
-      return
-    end
-  end
-
-  -- Get current window view
-  local total_lines = vim.api.nvim_buf_line_count(bufnr)
-  local window_height = vim.api.nvim_win_get_height(win)
-  local topline = vim.fn.line('w0')
-
-  -- Check if we're near the bottom (within last screen of text)
-  local is_near_bottom = (total_lines - current_line_num) < window_height
-
-  -- Find the highest user message number in the buffer
-  local highest_number = 0
-  for _, line in ipairs(lines) do
-    local num = line:match("^user %((%d+)%):")
-    if num then
-      highest_number = math.max(highest_number, tonumber(num))
-    end
-  end
-
-  -- Get only the latest user message
-  local content = get_latest_user_message()
-  if content == "" then
-    -- For the first message, get everything after the help text
-    local lines = vim.api.nvim_buf_get_lines(bufnr, 12, -1, false)
-    content = table.concat(lines, '\n')
-  end
+  -- Get latest user message
+  local content, message_number = get_latest_user_message()
 
   -- Skip if content is empty
   if vim.trim(content) == "" then
     return
   end
 
-  -- Use highest_number + 1 for the new message number
-  local user_count = highest_number + 1
+  -- If no message number found, this is the first message
+  if not message_number then
+    message_number = 1
+  else
+    message_number = message_number + 1
+  end
+
+  -- Add file context to the message
+  local full_content = get_file_context() .. content
 
   -- Add user message to history
   table.insert(M.chat_history[bufnr], {
-    content = content,
+    content = full_content,
     id = generate_id(),
     opts = { visible = true },
     role = "user",
-    message_number = user_count
+    message_number = message_number
   })
 
   -- Prepare message format for API
@@ -384,7 +392,7 @@ function M.send_message()
   local message = {
     {
       role = "user",
-      content = content
+      content = full_content
     }
   }
 
@@ -421,7 +429,7 @@ function M.send_message()
       append_to_buffer(response_text, "llm")
 
       -- Add a new blank line and prompt for the next user message
-      local next_prompt = string.format("user (%d): ", highest_number + 1)
+      local next_prompt = string.format("user (%d): ", message_number + 1)
       vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", next_prompt })
 
       -- Move cursor to the end of the prompt line and ensure it's visible
@@ -591,7 +599,7 @@ end
 -- Function to show system prompt in a floating window
 local function show_system_prompt()
   local bufnr = vim.api.nvim_get_current_buf()
-  local system_msg = build_system_prompt()
+  local system_msg = M.build_system_prompt()
   
   -- Create buffer for system prompt
   local float_bufnr = vim.api.nvim_create_buf(false, true)
