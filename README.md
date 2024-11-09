@@ -1,18 +1,42 @@
-# LLMancer.nvim
+# LLMancer.nvim 🧙‍♂️
 
-A Neovim plugin for chatting with LLMs (currently supporting Anthropic's Claude).
+A Neovim plugin for chatting with LLMs.
 
-## Installation
+## ✨ Features
 
-Using [packer.nvim](https://github.com/wbthomason/packer.nvim):
+- Everything is just a normal buffer as much as possible
+- Chat all in one buffer, instead of multiple windows
+- LLM doesn't need to provide line numbers in it's responses, it's a two step process to apply changes
 
-## Development
+## 📦 Installation
 
-### Running Tests
+Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
-Tests require [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) to be installed. You can install it with your package manager or run:
-
-```bash
-make deps  # This will install plenary.nvim and other development dependencies
-make test  # Run the tests
+```lua
+{
+    'jpmcb/LLMancer.nvim',
+    dependencies = { "nvim-lua/plenary.nvim" },
+    config = function()
+        require('llmancer').setup({
+            anthropic_api_key = 'your-api-key-here', -- Required
+            -- Optional configuration...
+            model = 'claude-3-sonnet-20240229',
+            max_tokens = 4096,
+            temperature = 0.7,
+        })
+    end,
+    keys = {
+        { "<leader>ll", "<cmd>lua require('llmancer').open_chat()<cr>",  desc = "Open LLMancer Chat" },
+        { "<leader>lc", "<cmd>lua require('llmancer').list_chats()<cr>", desc = "List LLMancer Chats" },
+    },
+},
 ```
+
+## 🚀 Usage
+
+Start a chat session:
+
+```lua
+require('llmancer').open_chat()
+```
+
