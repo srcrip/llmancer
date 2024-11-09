@@ -154,32 +154,48 @@ function M.create_thinking_indicator(bufnr)
   local current_frame = 1
   local namespace = vim.api.nvim_create_namespace('llmancer_thinking')
   local timer = vim.loop.new_timer()
+  local is_running = true
 
+  -- Clear namespace at start
   vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
 
   timer:start(0, 80, vim.schedule_wrap(function()
-    if not vim.api.nvim_buf_is_valid(bufnr) then
+    if not vim.api.nvim_buf_is_valid(bufnr) or not is_running then
       timer:stop()
+      timer:close()
+      pcall(vim.api.nvim_buf_clear_namespace, bufnr, namespace, 0, -1)
       return
     end
 
     current_frame = (current_frame % #frames) + 1
-    local last_line = vim.api.nvim_buf_line_count(bufnr) - 1
-
-    vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
-    vim.api.nvim_buf_set_extmark(bufnr, namespace, last_line, 0, {
-      virt_text = {
-        { "Assistant thinking... ", "Comment" },
-        { frames[current_frame],    "Special" }
-      },
-      virt_text_pos = "eol",
-      priority = 100,
-    })
+    local last_line = vim.api.nvim_buf_line_count(bufnr)
+    if last_line > 0 then
+      last_line = last_line - 1
+      pcall(vim.api.nvim_buf_clear_namespace, bufnr, namespace, 0, -1)
+      pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, last_line, 0, {
+        virt_text = {
+          { "Assistant thinking... ", "Comment" },
+          { frames[current_frame],    "Special" }
+        },
+        virt_text_pos = "eol",
+        priority = 100,
+      })
+    end
   end))
 
   return function()
-    timer:stop()
-    vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
+    if is_running then
+      is_running = false
+      if timer then
+        timer:stop()
+        timer:close()
+      end
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(bufnr) then
+          pcall(vim.api.nvim_buf_clear_namespace, bufnr, namespace, 0, -1)
+        end
+      end)
+    end
   end
 end
 

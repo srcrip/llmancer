@@ -58,9 +58,10 @@ local function with_retry(max_retries, initial_delay, request_fn)
   return nil
 end
 
--- Update the parse_params_from_buffer function
-local function parse_params_from_buffer(bufnr)
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+-- Parse parameters from the --- delimited section at the top of the buffer
+---@param lines string[] The buffer lines to parse
+---@return table|nil params The parsed parameters or nil if invalid
+local function parse_param_section(lines)
   local in_params = false
   local params_text = {}
 
@@ -76,29 +77,153 @@ local function parse_params_from_buffer(bufnr)
     end
   end
 
-  -- Try to load the params as Lua code
-  local params_str = table.concat(params_text, "\n")
-  local chunk, err = loadstring("return " .. params_str)
-  if chunk then
-    local success, result = pcall(chunk)
-    if success then
-      -- Return the entire table instead of just params field
-      return result
-    end
+  return params_text
+end
+
+-- Safely evaluate Lua code string and return result
+---@param code_str string The Lua code to evaluate
+---@return table|nil result The evaluated result or nil if error
+---@return string|nil error The error message if evaluation failed
+local function safe_eval_lua(code_str)
+  local chunk, load_err = loadstring("return " .. code_str)
+  if not chunk then
+    return nil, "Failed to load Lua code: " .. (load_err or "unknown error")
   end
-  return nil
+
+  local ok, result = pcall(chunk)
+  if not ok then
+    return nil, "Failed to execute Lua code: " .. tostring(result)
+  end
+
+  return result
+end
+
+-- Get configuration parameters from buffer
+---@param bufnr number The buffer number
+---@return table params The configuration parameters
+local function get_buffer_config(bufnr)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local params_text = parse_param_section(lines)
+  
+  if not params_text or #params_text == 0 then
+    return {
+      params = {
+        model = config.model,
+        max_tokens = config.max_tokens,
+        temperature = config.temperature,
+      },
+      context = {
+        files = {},
+        global = {}
+      }
+    }
+  end
+
+  local params_str = table.concat(params_text, "\n")
+  local result, err = safe_eval_lua(params_str)
+  
+  if err then
+    vim.notify("Error parsing parameters: " .. err, vim.log.levels.WARN)
+    return {
+      params = {
+        model = config.model,
+        max_tokens = config.max_tokens,
+        temperature = config.temperature,
+      },
+      context = {
+        files = {},
+        global = {}
+      }
+    }
+  end
+
+  -- Ensure required fields exist
+  result.params = result.params or {
+    model = config.model,
+    max_tokens = config.max_tokens,
+    temperature = config.temperature,
+  }
+  result.context = result.context or { files = {}, global = {} }
+  
+  return result
+end
+
+-- Append text to the buffer, handling newlines appropriately
+---@param bufnr number The buffer number
+---@param new_text string The text to append
+local function append_to_buffer_streaming(bufnr, new_text)
+  local last_line_idx = vim.api.nvim_buf_line_count(bufnr) - 1
+  local last_line = vim.api.nvim_buf_get_lines(bufnr, last_line_idx, last_line_idx + 1, false)[1]
+  
+  -- Split the new text into lines
+  local lines = vim.split(new_text, "\n", { plain = true })
+  
+  -- Update the last line with the first part
+  vim.api.nvim_buf_set_lines(bufnr, last_line_idx, last_line_idx + 1, false, 
+    { last_line .. lines[1] })
+  
+  -- Add any additional lines
+  if #lines > 1 then
+    vim.api.nvim_buf_set_lines(bufnr, last_line_idx + 1, last_line_idx + 1, false,
+      vim.list_slice(lines, 2))
+  end
+end
+
+-- Handle a single chunk of streamed response
+---@param chunk string The raw chunk from the API
+---@param bufnr number The buffer number
+---@param message_number number|nil The message number
+---@param accumulated_text string The accumulated text so far
+---@param callback function|nil The callback function
+---@return string accumulated_text The updated accumulated text
+local function handle_stream_chunk(chunk, bufnr, message_number, accumulated_text, callback)
+  -- Look for data: lines
+  local data = chunk:match("^data: (.+)")
+  if not data then return accumulated_text end
+
+  if data == "[DONE]" then
+    vim.schedule(function()
+      -- Add a blank line and next user prompt after completion
+      local next_prompt = string.format("\nuser (%d): ", (message_number or 0) + 1)
+      vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", next_prompt })
+      
+      -- Move cursor to the end
+      local line_count = vim.api.nvim_buf_line_count(bufnr)
+      vim.api.nvim_win_set_cursor(0, { line_count, #next_prompt })
+
+      if callback then
+        callback({ content = { { text = accumulated_text } } })
+      end
+    end)
+    return accumulated_text
+  end
+
+  local ok, content_delta = pcall(vim.fn.json_decode, data)
+  if not ok or not content_delta or not content_delta.delta or not content_delta.delta.text then
+    return accumulated_text
+  end
+
+  local new_text = content_delta.delta.text
+  accumulated_text = accumulated_text .. new_text
+
+  vim.schedule(function()
+    -- If this is the first chunk, add an initial newline
+    if #accumulated_text == #new_text then
+      vim.api.nvim_buf_set_lines(bufnr, -2, -1, false, { "" })
+    end
+
+    append_to_buffer_streaming(bufnr, new_text)
+  end)
+
+  return accumulated_text
 end
 
 -- Update the send_to_anthropic function to handle streaming
 function M.send_to_anthropic(message, callback)
   local Job = require('plenary.job')
   local bufnr = vim.api.nvim_get_current_buf()
-  local config_table = parse_params_from_buffer(bufnr)
-  local params = (config_table and config_table.params) or {
-    model = config.model,
-    max_tokens = config.max_tokens,
-    temperature = config.temperature,
-  }
+  local config_table = get_buffer_config(bufnr)
+  local params = config_table.params
 
   -- Build system prompt
   local system = M.build_system_prompt()
@@ -131,72 +256,21 @@ function M.send_to_anthropic(message, callback)
       '--no-buffer',
     },
     on_stdout = vim.schedule_wrap(function(_, chunk)
-      if not response_started then
-        -- Add the model prefix only once at the start
-        vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { config.model .. ": " })
-        response_started = true
-      end
-
       if chunk then
-        -- Look for data: lines
-        local data = chunk:match("^data: (.+)")
-        if data and data ~= "[DONE]" then
-          local ok, content_delta = pcall(vim.fn.json_decode, data)
-          if ok and content_delta and content_delta.delta and content_delta.delta.text then
-            local new_text = content_delta.delta.text
-            accumulated_text = accumulated_text .. new_text
-
-            -- Split accumulated text into lines
-            local lines = vim.split(accumulated_text, "\n", { plain = true })
-            
-            -- Update the buffer with new content
-            local buf_line_count = vim.api.nvim_buf_line_count(bufnr)
-            local last_line = vim.api.nvim_buf_get_lines(bufnr, buf_line_count - 1, buf_line_count, false)[1]
-
-            if #lines == 1 then
-              -- Single line update
-              vim.api.nvim_buf_set_lines(bufnr, buf_line_count - 1, buf_line_count, false, { last_line .. lines[1] })
-              accumulated_text = ""
-            else
-              -- Multiple lines
-              vim.api.nvim_buf_set_lines(bufnr, buf_line_count - 1, buf_line_count, false, 
-                { last_line .. lines[1] })
-              if #lines > 2 then
-                vim.api.nvim_buf_set_lines(bufnr, buf_line_count, buf_line_count, false, 
-                  vim.list_slice(lines, 2, #lines - 1))
-              end
-              accumulated_text = lines[#lines]
-            end
-          end
-        elseif data == "[DONE]" then
-          -- Stream is complete
-          -- Add a blank line and next user prompt after completion
-          local next_prompt = string.format("\nuser (%d): ", (message_number or 0) + 1)
-          vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", next_prompt })
-          
-          -- Move cursor to the end
-          local line_count = vim.api.nvim_buf_line_count(bufnr)
-          vim.api.nvim_win_set_cursor(0, { line_count, #next_prompt })
-
-          -- Call the callback with the final response
-          if callback then
-            callback({ content = { { text = accumulated_text } } })
-          end
-        end
+        accumulated_text = handle_stream_chunk(chunk, bufnr, message_number, accumulated_text, callback)
       end
     end),
-    on_exit = function(j, return_val)
+    on_exit = vim.schedule_wrap(function(j, return_val)
       if return_val ~= 0 then
-        vim.notify("Error in API request", vim.log.levels.ERROR)
         if callback then
           callback(nil)
         end
       end
-    end,
+    end),
   })
 
   job:start()
-  return job -- Return job handle for potential cancellation
+  return job
 end
 
 -- Function to get buffer content as message
@@ -428,7 +502,7 @@ function M.build_system_prompt()
   local system_context = config.system_prompt or system_role
 
   -- Get the params table from the buffer
-  local params = parse_params_from_buffer(chat_bufnr)
+  local params = get_buffer_config(chat_bufnr)
   if not params or not params.context then return system_context end
 
   -- Add context for each file
@@ -481,7 +555,7 @@ local function get_file_context()
   local context_lines = {}
 
   -- Get params from buffer to check context configuration
-  local params = parse_params_from_buffer(chat_bufnr)
+  local params = get_buffer_config(chat_bufnr)
   if params and params.context then
     -- Handle files context
     if params.context.files then
@@ -519,7 +593,51 @@ local function get_file_context()
   return ""
 end
 
--- Function to send message (called when pressing Enter)
+-- Handle the response from the API
+---@param response table|nil The response from the API
+---@param bufnr number The buffer number
+---@param win number The window number
+---@param message_number number The message number
+local function handle_response(response, bufnr, win, message_number)
+  if not response or not response.content or not response.content[1] then
+    return
+  end
+
+  local response_text = response.content[1].text
+
+  -- Add newline before code block if response starts with ```
+  if response_text:match("^```") then
+    response_text = "\n" .. response_text
+  end
+
+  -- Add response to history
+  table.insert(M.chat_history[bufnr], {
+    content = response_text,
+    id = generate_id(),
+    opts = { visible = true },
+    role = "llm"
+  })
+
+  -- Replace the blank lines with response
+  local last_line = vim.api.nvim_buf_line_count(bufnr)
+  vim.api.nvim_buf_set_lines(bufnr, last_line - 2, last_line, false, { "" }) -- Remove extra blank line
+  append_to_buffer(response_text, "llm")
+
+  -- Add a new blank line and prompt for the next user message
+  local next_prompt = string.format("user (%d): ", message_number + 1)
+  vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", next_prompt })
+
+  -- Move cursor to the end of the prompt line and ensure it's visible
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  vim.api.nvim_win_set_cursor(win, { line_count, #next_prompt })
+
+  -- Save chat after successful response
+  vim.schedule(function()
+    save_chat(bufnr)
+  end)
+end
+
+-- Update send_message to use the new function
 function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
   local win = vim.api.nvim_get_current_win()
@@ -554,7 +672,7 @@ function M.send_message()
   end
 
   -- Get params and build context from files
-  local params = parse_params_from_buffer(bufnr)
+  local params = get_buffer_config(bufnr)
   local context_content = {}
   
   if params and params.context and params.context.files then
@@ -607,45 +725,23 @@ function M.send_message()
   local stop_thinking = main.create_thinking_indicator(bufnr)
 
   -- Send to Anthropic asynchronously
-  M.send_to_anthropic(message, function(response)
-    if response and response.content and response.content[1] then
-      local response_text = response.content[1].text
+  local job = M.send_to_anthropic(message, function(response)
+    -- Ensure we clear the thinking indicator namespace properly
+    vim.schedule(function()
+      stop_thinking()
+    end)
 
-      -- Add newline before code block if response starts with ```
-      if response_text:match("^```") then
-        response_text = "\n" .. response_text
-      end
-
-      -- Add response to history
-      table.insert(M.chat_history[bufnr], {
-        content = response_text,
-        id = generate_id(),
-        opts = { visible = true },
-        role = "llm"
-      })
-
-      -- Replace the blank lines with response
-      local last_line = vim.api.nvim_buf_line_count(bufnr)
-      vim.api.nvim_buf_set_lines(bufnr, last_line - 2, last_line, false, { "" }) -- Remove extra blank line
-      append_to_buffer(response_text, "llm")
-
-      -- Add a new blank line and prompt for the next user message
-      local next_prompt = string.format("user (%d): ", message_number + 1)
-      vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", next_prompt })
-
-      -- Move cursor to the end of the prompt line and ensure it's visible
-      local line_count = vim.api.nvim_buf_line_count(bufnr)
-      vim.api.nvim_win_set_cursor(win, { line_count, #next_prompt })
-
-      -- Save chat after successful response
-      vim.schedule(function()
-        save_chat(bufnr)
-      end)
-    end
-
-    -- Stop thinking animation
-    stop_thinking()
+    handle_response(response, bufnr, win, message_number)
   end)
+
+  -- Ensure cleanup happens even if job fails
+  if job then
+    job:after(function()
+      vim.schedule(function()
+        stop_thinking()
+      end)
+    end)
+  end
 end
 
 -- Update the create_help_text function to remove both lines
