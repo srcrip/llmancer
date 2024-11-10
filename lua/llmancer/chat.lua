@@ -375,20 +375,77 @@ local function append_to_buffer(text, message_type, message_number)
   vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
 end
 
+-- Helper function to create floating window
+local function create_floating_window(title)
+  -- Get editor dimensions
+  local width = vim.api.nvim_get_option("columns")
+  local height = vim.api.nvim_get_option("lines")
+
+  -- Calculate floating window size (80% of editor size)
+  local win_height = math.ceil(height * 0.8)
+  local win_width = math.ceil(width * 0.8)
+
+  -- Calculate starting position
+  local row = math.ceil((height - win_height) / 2)
+  local col = math.ceil((width - win_width) / 2)
+
+  -- Set window options
+  local opts = {
+    relative = 'editor',
+    row = row,
+    col = col,
+    width = win_width,
+    height = win_height,
+    style = 'minimal',
+    border = 'rounded',
+    title = title,
+    title_pos = 'center',
+  }
+
+  return opts
+end
+
+-- Helper function to setup floating buffer
+local function setup_floating_buffer(bufnr, filetype)
+  -- Set buffer options
+  vim.bo[bufnr].buftype = 'nofile'
+  vim.bo[bufnr].bufhidden = 'wipe'
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].filetype = filetype
+
+  -- Add keymaps to close window
+  vim.api.nvim_buf_set_keymap(bufnr, 'n', 'q', 
+    [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]], 
+    { noremap = true, silent = true })
+  vim.api.nvim_buf_set_keymap(bufnr, 'n', '<Esc>', 
+    [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]], 
+    { noremap = true, silent = true })
+
+  -- Add autocmd to properly clean up buffer when window is closed
+  vim.api.nvim_create_autocmd("WinClosed", {
+    buffer = bufnr,
+    callback = function()
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(bufnr) then
+          vim.api.nvim_buf_delete(bufnr, { force = true })
+        end
+      end)
+    end,
+    once = true,
+  })
+end
+
 -- Function to view conversation
 function M.view_conversation()
   local bufnr = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_buf_set_name(bufnr, 'LLMancer-History')
 
-  -- Open in a new buffer
-  vim.cmd('enew')
-  vim.api.nvim_set_current_buf(bufnr)
+  -- Create and open floating window with title
+  local win_opts = create_floating_window(" Chat History ")
+  local win = vim.api.nvim_open_win(bufnr, true, win_opts)
 
-  -- Set buffer options
-  vim.bo[bufnr].buftype = 'nofile'
-  vim.bo[bufnr].bufhidden = 'hide'
-  vim.bo[bufnr].swapfile = false
-  vim.bo[bufnr].filetype = 'llmancer'
+  -- Setup buffer options and mappings
+  setup_floating_buffer(bufnr, 'llmancer')
 
   -- Get current chat history
   local current_bufnr = vim.fn.bufnr(config.buffer_name)
@@ -396,11 +453,11 @@ function M.view_conversation()
 
   -- Convert history to string
   local content = vim.fn.json_encode(history)
-  -- Pretty print the JSON
-  content = vim.fn.system('echo ' .. vim.fn.shellescape(content) .. ' | jq .')
+  -- Pretty print the JSON with fallback if jq is not available
+  local jq_result = vim.fn.system('which jq >/dev/null 2>&1 && echo ' .. vim.fn.shellescape(content) .. ' | jq . || echo ' .. vim.fn.shellescape(content))
 
   -- Set content
-  local lines = vim.split(content, '\n')
+  local lines = vim.split(jq_result, '\n')
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 end
 
@@ -480,7 +537,7 @@ Act as an expert software developer. Follow best practices and conventions:
 
 You are part of a system for suggesting code changes to a developer.
 
-This developer is an export and doesn't need long explanations.
+This developer is an expert and doesn't need long explanations.
 
 Prefer to provide concise information and requested code changes.
 
@@ -773,6 +830,26 @@ local help_text = {
   "",
 }
 
+-- Function to show system prompt in new buffer
+local function show_system_prompt()
+  local bufnr = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_buf_set_name(bufnr, 'LLMancer-SystemPrompt')
+
+  -- Create and open floating window with title
+  local win_opts = create_floating_window(" System Prompt ")
+  local win = vim.api.nvim_open_win(bufnr, true, win_opts)
+
+  -- Setup buffer options and mappings
+  setup_floating_buffer(bufnr, 'markdown')
+
+  -- Get system prompt
+  local system_prompt = M.build_system_prompt()
+
+  -- Set content
+  local lines = vim.split(system_prompt, '\n')
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+end
+
 -- Add the keymap in both open_chat and load_chat functions
 local function setup_buffer_mappings(bufnr)
   -- Existing mappings...
@@ -790,7 +867,7 @@ local function setup_buffer_mappings(bufnr)
     { noremap = true, silent = true, desc = "Show system prompt" })
 end
 
--- Export the function
+-- Export the functions
 M.show_system_prompt = show_system_prompt
 M.setup_buffer_mappings = setup_buffer_mappings
 
