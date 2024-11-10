@@ -215,29 +215,23 @@ end
 -- Move save_chat to be part of the module instead of local
 function M.save_chat(bufnr)
   local chat_name = vim.api.nvim_buf_get_name(bufnr)
-  local chat_id = chat_name:match("LLMancer_(.+)$") or chat_name:match("LLMancer%.nvim_(.+)$")
-
+  
+  -- Extract just the filename without extension from the full path
+  local chat_id = vim.fn.fnamemodify(chat_name, ':t:r')
+  
   if not chat_id then
-    vim.notify("Could not extract chat ID from buffer name: " .. chat_name, vim.log.levels.DEBUG)
+    vim.notify("Could not extract chat ID from buffer name: " .. chat_name, vim.log.levels.ERROR)
     return
   end
 
-  -- Ensure storage directory exists
-  local storage_dir = config.storage_dir
-  vim.fn.mkdir(storage_dir, "p")
-
-  -- Use .llmc extension instead of .txt
-  local filename = storage_dir .. "/" .. chat_id .. ".llmc"
-
-  -- Get all lines from buffer
+  -- Since we're already using the full path as the buffer name, we can just write to it directly
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-
-  -- Write to file
-  local success = vim.fn.writefile(lines, filename)
+  local success = vim.fn.writefile(lines, chat_name)
+  
   if success == 0 then
-    vim.notify("Chat saved to " .. filename, vim.log.levels.DEBUG)
+    vim.notify("Chat saved to " .. chat_name, vim.log.levels.DEBUG)
   else
-    vim.notify("Failed to save chat to " .. filename, vim.log.levels.ERROR)
+    vim.notify("Failed to save chat to " .. chat_name, vim.log.levels.ERROR)
   end
 end
 
@@ -1022,7 +1016,7 @@ function M.load_chat(filename, target_bufnr)
     buf_name = string.format('%s_%d', base_name, counter)
   end
   
-  -- Set buffer options before setting name
+  -- Set buffer options
   vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
   vim.api.nvim_buf_set_option(bufnr, 'swapfile', false)
   vim.api.nvim_buf_set_option(bufnr, 'filetype', 'llmancer')
@@ -1039,8 +1033,15 @@ function M.load_chat(filename, target_bufnr)
     M.target_buffers[bufnr] = target_bufnr
   end
   
-  -- Setup buffer mappings
+  -- Setup buffer mappings and features
   M.setup_buffer_mappings(bufnr)
+  
+  -- Enable treesitter if available
+  if pcall(require, "nvim-treesitter.configs") then
+    vim.cmd([[TSBufEnable highlight]])
+    vim.cmd([[TSBufEnable indent]])
+    pcall(vim.treesitter.start, bufnr, "markdown")
+  end
   
   -- Switch to the buffer
   vim.api.nvim_set_current_buf(bufnr)

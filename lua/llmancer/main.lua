@@ -38,14 +38,19 @@ end
 ---@param chat_name string Name for the chat buffer
 ---@return number bufnr Buffer number
 local function get_or_create_chat_buffer(chat_name)
-  local existing_bufnr = vim.fn.bufnr(chat_name)
+  -- Generate the full file path
+  local file_path = M.config.storage_dir .. '/' .. chat_name .. '.llmc'
+  
+  -- Check if buffer already exists for this file
+  local existing_bufnr = vim.fn.bufnr(file_path)
   if existing_bufnr ~= -1 then
     open_buffer_split(existing_bufnr)
     return existing_bufnr
   end
 
-  local bufnr = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_buf_set_name(bufnr, chat_name)
+  -- Create new buffer with the full file path
+  local bufnr = vim.api.nvim_create_buf(true, false)  -- Listed buffer, not scratch
+  vim.api.nvim_buf_set_name(bufnr, file_path)
   open_buffer_split(bufnr)
   return bufnr
 end
@@ -55,7 +60,6 @@ end
 ---@param target_bufnr number Target buffer number
 local function setup_chat_buffer(bufnr, target_bufnr)
   -- Set buffer options
-  vim.bo[bufnr].buftype = 'nofile'
   vim.bo[bufnr].bufhidden = 'hide'
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].filetype = 'llmancer'
@@ -162,15 +166,19 @@ function M.create_thinking_indicator(bufnr)
   local namespace = vim.api.nvim_create_namespace('llmancer_thinking')
   local timer = vim.loop.new_timer()
   local is_running = true
+  local is_closing = false
 
   -- Clear namespace at start
   vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
 
   timer:start(0, 80, vim.schedule_wrap(function()
     if not vim.api.nvim_buf_is_valid(bufnr) or not is_running then
-      timer:stop()
-      timer:close()
-      pcall(vim.api.nvim_buf_clear_namespace, bufnr, namespace, 0, -1)
+      if not is_closing then
+        is_closing = true
+        timer:stop()
+        timer:close()
+        pcall(vim.api.nvim_buf_clear_namespace, bufnr, namespace, 0, -1)
+      end
       return
     end
 
@@ -191,8 +199,9 @@ function M.create_thinking_indicator(bufnr)
   end))
 
   return function()
-    if is_running then
+    if is_running and not is_closing then
       is_running = false
+      is_closing = true
       if timer then
         timer:stop()
         timer:close()
@@ -211,12 +220,16 @@ end
 ---@return number bufnr The buffer number of the created chat buffer
 function M.open_chat(chat_id)
   local target_bufnr = vim.api.nvim_get_current_buf()
-  local chat_name = chat_id and ("LLMancer_" .. chat_id) or (M.config.buffer_name .. "_" .. generate_chat_id())
-
-  local bufnr = get_or_create_chat_buffer(chat_name)
+  
+  -- Generate chat ID if not provided
+  chat_id = chat_id or generate_chat_id()
+  
+  -- Create buffer with the file path directly
+  local bufnr = get_or_create_chat_buffer(chat_id)
   setup_chat_buffer(bufnr, target_bufnr)
 
-  if chat_id then
+  -- If this is an existing chat, load its content
+  if vim.fn.filereadable(vim.api.nvim_buf_get_name(bufnr)) == 1 then
     require('llmancer.chat').load_chat(chat_id)
   end
 
@@ -305,7 +318,11 @@ function M.list_chats()
           if selected and selected[1] then
             for _, entry in ipairs(entries) do
               if entry.display == selected[1] then
-                M.open_chat(entry.chat_id)
+                -- Get current buffer as target buffer before opening chat
+                local target_bufnr = vim.api.nvim_get_current_buf()
+                local bufnr = M.open_chat(entry.chat_id)
+                -- Ensure chat buffer is properly set up
+                setup_chat_buffer(bufnr, target_bufnr)
                 break
               end
             end
@@ -328,8 +345,7 @@ function M.load_chat()
   -- Ensure the directory exists
   vim.fn.mkdir(chat_dir, "p")
 
-  -- Get list of chat files (now looking for .txt instead of .json)
-  local files = vim.fn.globpath(chat_dir, "*.txt", false, true)
+  local files = vim.fn.globpath(chat_dir, "*.llmc", false, true)
   if #files == 0 then
     vim.notify("No chat histories found", vim.log.levels.INFO)
     return
