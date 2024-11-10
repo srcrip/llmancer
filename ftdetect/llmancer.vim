@@ -1,1 +1,1 @@
-au BufRead,BufNewFile LLMancer* setfiletype llmancer 
+au BufRead,BufNewFile *.llmc set filetype=llmancer 

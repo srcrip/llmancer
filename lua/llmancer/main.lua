@@ -144,6 +144,13 @@ function M.setup(opts)
   ensure_storage_dir()
   setup_treesitter()
   setup_buffer_actions()
+
+  -- Create global command for range-based plan creation
+  vim.api.nvim_create_user_command('LLMancerPlan', function(opts)
+    local start = opts.line1
+    local end_line = opts.line2
+    require('llmancer.chat').create_plan_from_range(start, end_line)
+  end, { range = true, desc = "Create application plan from range" })
 end
 
 -- Create thinking indicator animation
@@ -221,7 +228,7 @@ function M.list_chats()
   local fzf = require('fzf-lua')
 
   -- Get list of chat files
-  local chat_files = vim.fn.glob(M.config.storage_dir .. "/*.txt", false, true)
+  local chat_files = vim.fn.glob(M.config.storage_dir .. "/*.llmc", false, true)
   if #chat_files == 0 then
     vim.notify("No saved chats found", vim.log.levels.INFO)
     return
@@ -369,6 +376,69 @@ function M.load_chat()
       }
     }
   )
+end
+
+-- Function to open chat selection menu
+function M.open_chat_menu()
+  local fzf = require('fzf-lua')
+  local chat_dir = config.storage_dir
+
+  -- Create directory if it doesn't exist
+  vim.fn.mkdir(chat_dir, "p")
+
+  -- List all .llmc files in the chat directory
+  local find_command = string.format("find '%s' -name '*.llmc' -type f", chat_dir)
+  local files = vim.fn.systemlist(find_command)
+
+  -- Format the files for display
+  local formatted_files = {}
+  for _, file in ipairs(files) do
+    local filename = vim.fn.fnamemodify(file, ':t:r')  -- Remove path and extension
+    local timestamp = filename:match("^(%d+_%d+_%d+)") -- Extract timestamp
+    if timestamp then
+      -- Convert timestamp to readable format
+      local year = timestamp:sub(1,4)
+      local month = timestamp:sub(5,6)
+      local day = timestamp:sub(7,8)
+      local hour = timestamp:sub(10,11)
+      local min = timestamp:sub(12,13)
+      local sec = timestamp:sub(14,15)
+      local readable = string.format("%s-%s-%s %s:%s:%s", year, month, day, hour, min, sec)
+      table.insert(formatted_files, {
+        display = readable,
+        filename = filename,
+        path = file
+      })
+    end
+  end
+
+  -- Sort files by timestamp (newest first)
+  table.sort(formatted_files, function(a, b)
+    return a.filename > b.filename
+  end)
+
+  -- Create display list and lookup table
+  local display_list = {}
+  local lookup = {}
+  for _, item in ipairs(formatted_files) do
+    table.insert(display_list, item.display)
+    lookup[item.display] = item.filename
+  end
+
+  -- Show FZF picker
+  fzf.fzf_exec(display_list, {
+    prompt = "Select Chat > ",
+    actions = {
+      ["default"] = function(selected)
+        if selected and selected[1] then
+          local filename = lookup[selected[1]]
+          if filename then
+            M.open_chat(filename)
+          end
+        end
+      end
+    }
+  })
 end
 
 return M

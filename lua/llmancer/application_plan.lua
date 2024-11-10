@@ -4,7 +4,6 @@ local M = {}
 local HELP_TEXT = [[Apply Changes:
 <enter> to apply change (without saving)
 <A> to apply all changes (and save)
-<U> to undo all changes
 :q or ZQ to quit without applying changes
 :wq or ZZ to apply changes and save the changed buffers
 ]]
@@ -71,19 +70,35 @@ end
 -- Function to create and show the plan buffer
 ---@param content string The plan content
 local function create_plan_buffer(content)
-    local bufnr = vim.api.nvim_create_buf(false, true)
-    local plan_name = "LLMancer-Plan-" .. os.date("%H%M%S")
+    -- Create a unique filename in the storage directory
+    local config = require('llmancer.main').config
+    local plan_dir = config.storage_dir .. "/plans"
+    vim.fn.mkdir(plan_dir, "p")
+    local plan_name = plan_dir .. "/plan_" .. os.date("%Y%m%d_%H%M%S") .. ".txt"
+    
+    local bufnr = vim.api.nvim_create_buf(true, false)
     vim.api.nvim_buf_set_name(bufnr, plan_name)
 
     -- Set buffer options
     vim.bo[bufnr].modifiable = true
-    vim.bo[bufnr].buftype = 'nofile'
     vim.bo[bufnr].swapfile = false
     vim.bo[bufnr].filetype = 'llmancer_plan'
 
     -- Set content
     local lines = vim.split(HELP_TEXT .. "\n" .. content, "\n")
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+
+    -- Set up autocmd to save modified buffers before buffer write
+    vim.api.nvim_create_autocmd({ "BufWritePre" }, {
+        buffer = bufnr,
+        callback = function()
+            M.apply_all_blocks(bufnr)
+            -- Add a small delay to ensure all buffer modifications are complete
+            vim.defer_fn(function()
+                save_modified_buffers()
+            end, 100)
+        end
+    })
 
     -- Calculate window size and position
     local width = math.min(120, math.floor(vim.o.columns * 0.8))
@@ -108,19 +123,9 @@ local function create_plan_buffer(content)
     -- Enable treesitter highlighting for the buffer
     if pcall(require, "nvim-treesitter.configs") then
         vim.cmd([[TSBufEnable highlight]])
-        -- Enable markdown highlighting
         vim.cmd([[TSBufEnable indent]])
-        -- Enable language injection
         pcall(vim.treesitter.start, bufnr, "markdown")
     end
-
-    -- Set up autocmd to save modified buffers before buffer write
-    vim.api.nvim_create_autocmd({ "BufWritePre" }, {
-        buffer = bufnr,
-        callback = function()
-            save_modified_buffers()
-        end
-    })
 
     -- Set up keymaps
     local opts = { buffer = bufnr, noremap = true, silent = true }
@@ -133,30 +138,27 @@ local function create_plan_buffer(content)
     -- Apply all blocks and save
     vim.keymap.set('n', 'A', function()
         M.apply_all_blocks(bufnr)
-        -- Add a small delay to ensure all buffer modifications are complete
-        vim.defer_fn(function()
-            save_modified_buffers()
-            vim.notify("Saved all modified buffers", vim.log.levels.INFO)
-        end, 100)
-    end, opts)
-
-    -- Undo all changes
-    vim.keymap.set('n', 'U', function()
-        for bufnr, _ in pairs(modified_buffers) do
-            if vim.api.nvim_buf_is_valid(bufnr) then
-                vim.api.nvim_buf_call(bufnr, function()
-                    vim.cmd('earlier 1f') -- Go back to last file write
-                end)
-            end
-        end
-        modified_buffers = {}
-        vim.notify("Undid all changes", vim.log.levels.INFO)
+        vim.cmd('write')
+        vim.notify("Saved all modified buffers", vim.log.levels.INFO)
     end, opts)
 
     -- Add q mapping to close the floating window
     vim.keymap.set('n', 'q', function()
         vim.api.nvim_win_close(win_id, true)
     end, opts)
+
+    -- Add autocmd to properly clean up buffer when window is closed
+    vim.api.nvim_create_autocmd("WinClosed", {
+        buffer = bufnr,
+        callback = function()
+            vim.schedule(function()
+                if vim.api.nvim_buf_is_valid(bufnr) then
+                    vim.api.nvim_buf_delete(bufnr, { force = true })
+                end
+            end)
+        end,
+        once = true,
+    })
 
     return bufnr
 end
@@ -287,18 +289,34 @@ function M.apply_block_under_cursor(bufnr)
     local start_line = cursor[1]
     local end_line = cursor[1]
 
-    -- Find block boundaries
-    while start_line > 1 and not lines[start_line - 1]:match("^file:") do
-        start_line = start_line - 1
-    end
-    while end_line < #lines and not lines[end_line + 1]:match("^file:") do
-        end_line = end_line + 1
+    -- Skip help text
+    local help_text_lines = #vim.split(HELP_TEXT, '\n')
+    if start_line <= help_text_lines then
+        vim.notify("Cannot apply help text", vim.log.levels.WARN)
+        return false
     end
 
-    local block_text = table.concat(vim.list_slice(lines, start_line, end_line), "\n")
-    if apply_block(block_text) then
-        vim.notify("Applied changes successfully", vim.log.levels.INFO)
-        return true
+    -- Find block boundaries
+    while start_line > help_text_lines and not lines[start_line]:match("^file:") do
+        start_line = start_line - 1
+    end
+    
+    -- Find the end of the block (next file: line or EOF)
+    while end_line < #lines do
+        end_line = end_line + 1
+        if lines[end_line] and lines[end_line]:match("^file:") then
+            end_line = end_line - 1
+            break
+        end
+    end
+
+    -- Extract and apply the block
+    if start_line >= help_text_lines and end_line <= #lines then
+        local block_text = table.concat(vim.list_slice(lines, start_line, end_line), "\n")
+        if apply_block(block_text) then
+            vim.notify("Applied changes successfully", vim.log.levels.INFO)
+            return true
+        end
     end
 
     vim.notify("Failed to apply changes", vim.log.levels.ERROR)
@@ -340,32 +358,64 @@ function M.apply_all_blocks(bufnr)
     vim.notify(string.format("Applied %d/%d changes", success_count, total_blocks), vim.log.levels.INFO)
 end
 
+-- Function to send request to Anthropic and get response
+---@param message string The message to send
+---@param callback fun(response: string|nil) Callback function with response
+local function get_operations_from_llm(message, callback)
+    local Job = require('plenary.job')
+    local config = require('llmancer.main').config
+
+    -- Prepare request body
+    local body = vim.fn.json_encode({
+        model = config.model,
+        max_tokens = config.max_tokens,
+        temperature = config.temperature,
+        messages = {{ role = "user", content = message }},
+        stream = false, -- No streaming needed for this
+    })
+
+    local job = Job:new({
+        command = 'curl',
+        args = {
+            'https://api.anthropic.com/v1/messages',
+            '-X', 'POST',
+            '-H', 'x-api-key: ' .. config.anthropic_api_key,
+            '-H', 'anthropic-version: 2023-06-01',
+            '-H', 'content-type: application/json',
+            '-d', body,
+        },
+        on_exit = vim.schedule_wrap(function(j, return_val)
+            if return_val == 0 then
+                local result = table.concat(j:result(), "")
+                local ok, decoded = pcall(vim.fn.json_decode, result)
+                if ok and decoded.content and decoded.content[1] then
+                    callback(decoded.content[1].text)
+                else
+                    vim.notify("Failed to parse LLM response", vim.log.levels.ERROR)
+                    callback(nil)
+                end
+            else
+                vim.notify("Failed to get LLM response", vim.log.levels.ERROR)
+                callback(nil)
+            end
+        end),
+    })
+
+    job:start()
+end
+
 -- Function to create application plan
 ---@param code_blocks string[] Array of code blocks to apply
 ---@param target_buffers number[] Array of target buffer numbers
 function M.create_plan(code_blocks, target_buffers)
-    local chat = require('llmancer.chat')
-
-    -- Get current chat buffer
-    local chat_bufnr = vim.api.nvim_get_current_buf()
-    local chat_history = chat.chat_history[chat_bufnr] or {}
-
-    -- Format chat history for context
-    local chat_context = {}
-    for _, msg in ipairs(chat_history) do
-        if msg.role == "user" then
-            table.insert(chat_context, "user: " .. msg.content)
-        elseif msg.role == "llm" then
-            table.insert(chat_context, "assistant: " .. msg.content)
-        end
-    end
-
-    -- -- Prepare buffer context
-    -- local buffer_context = {}
-    -- for _, bufnr in ipairs(target_buffers) do
-    --     table.insert(buffer_context, "Buffer " .. bufnr .. " content:\n```\n" .. get_buffer_content(bufnr) .. "\n```")
-    -- end
-
+    -- Create the plan buffer immediately with help text and initial message
+    local bufnr = create_plan_buffer("Generating plan...")
+    
+    -- Start thinking indicator
+    local main = require('llmancer.main')
+    local stop_thinking = main.create_thinking_indicator(bufnr)
+    
+    -- Prepare buffer context
     local buffer_context = {}
     for _, bufnr in ipairs(target_buffers) do
         local filename = vim.api.nvim_buf_get_name(bufnr)
@@ -373,23 +423,10 @@ function M.create_plan(code_blocks, target_buffers)
             "Filename " .. filename .. " content:\n```\n" .. get_buffer_content(bufnr) .. "\n```")
     end
 
-
-    -- INSERT BLOCK:
-    --
-    -- file: path/to/file.txt
-    -- operation: insert
-    -- start: 4
-    -- ```
-    -- console.log("foo bar");
-    -- ```
-    --
-    --
-
-    -- todo add:
-    -- - An overview of the filesystem of the project.
+    -- Build prompt
     local prompt = [[
       You are about to receive:
-        - The context of a chat with another AI. This chat will contain some code the user wants to apply to some files, or create new files from.
+        - Some code the user wants to apply to some files, or create new files from.
         - The files containing the user's current code.
 
       Your task is to return a set of operations, in order to apply the requested changes. Here are examples of each kind of block:
@@ -431,13 +468,11 @@ function M.create_plan(code_blocks, target_buffers)
 
       ===
 
-      Here's the context:
+      Here's the code to apply:
 
-      ** Context of user's chat: **
+    ]] .. table.concat(code_blocks, "\n\n") .. [[
 
-    ]] .. table.concat(chat_context, "\n\n") .. [[
-
-      ** Context of user's current files: **
+      Here are the current files:
 
     ]] .. table.concat(buffer_context, "\n\n") .. [[
 
@@ -446,17 +481,74 @@ function M.create_plan(code_blocks, target_buffers)
       REMEMBER:
       - you are to return only the set of operations, that is, ONLY CODE! nothing that's not code. Don't put anything else outside the blocks besides the header info.
       - when inserting text, consider the whitespace around the code you'll be inserting. For instance, you may want to have some blank lines in the code block you'll insert if it will result in properly formatted text once inserted.
-      - remember to incldue the language at the backticks, e.g. ```javascript because we use it for syntax highlighting.
-      - please try to use the `write` operation the most. When doing so remember to return the entirity of the changed file content.
+      - remember to include the language at the backticks, e.g. ```javascript because we use it for syntax highlighting.
+      - please try to use the `write` operation the most. When doing so remember to return the entirety of the changed file content.
       - you must always use the available operations. each code block must be either a write block or a replace block. and you must always include the file: and operation: header info.
     ]]
 
-    -- Send to LLM and create plan buffer
-    chat.send_to_anthropic({ { role = "user", content = prompt } }, function(response)
-        if response and response.content and response.content[1] then
-            create_plan_buffer(response.content[1].text)
+    -- Get operations from LLM and update the buffer
+    get_operations_from_llm(prompt, function(response)
+        -- Stop thinking indicator
+        stop_thinking()
+        
+        if response then
+            -- Update buffer content with response only (help text is already there)
+            local lines = vim.split(response, '\n')
+            vim.api.nvim_buf_set_lines(bufnr, #vim.split(HELP_TEXT, '\n'), -1, false, lines)
+        else
+            -- Show error message (help text is already there)
+            vim.api.nvim_buf_set_lines(bufnr, #vim.split(HELP_TEXT, '\n'), -1, false, {"Failed to get plan from LLM"})
         end
     end)
+    
+    return bufnr
+end
+
+-- Make create_plan_buffer available to other modules
+M.create_plan_buffer = create_plan_buffer
+
+-- Function to setup floating buffer
+local function setup_floating_buffer(bufnr, filetype)
+    -- Set buffer options
+    vim.bo[bufnr].swapfile = false
+    vim.bo[bufnr].filetype = filetype
+
+    -- Add keymaps to close window
+    vim.api.nvim_buf_set_keymap(bufnr, 'n', 'q', 
+        [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]], 
+        { noremap = true, silent = true })
+    vim.api.nvim_buf_set_keymap(bufnr, 'n', '<Esc>', 
+        [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]], 
+        { noremap = true, silent = true })
+    
+    -- Add keymap for applying block under cursor
+    vim.api.nvim_buf_set_keymap(bufnr, 'n', '<CR>',
+        [[<cmd>lua require('llmancer.application_plan').apply_block_under_cursor(vim.api.nvim_get_current_buf())<CR>]],
+        { noremap = true, silent = true })
+
+    -- Add ZZ and :wq handling
+    vim.api.nvim_buf_set_keymap(bufnr, 'n', 'ZZ',
+        [[<cmd>lua require('llmancer.application_plan').apply_all_blocks(vim.api.nvim_get_current_buf()) vim.api.nvim_win_close(0, true)<CR>]],
+        { noremap = true, silent = true })
+
+    -- Create buffer-local command for :wq
+    vim.api.nvim_buf_create_user_command(bufnr, 'wq', function()
+        M.apply_all_blocks(bufnr)
+        vim.api.nvim_win_close(0, true)
+    end, {})
+
+    -- Add autocmd to properly clean up buffer when window is closed
+    vim.api.nvim_create_autocmd("WinClosed", {
+        buffer = bufnr,
+        callback = function()
+            vim.schedule(function()
+                if vim.api.nvim_buf_is_valid(bufnr) then
+                    vim.api.nvim_buf_delete(bufnr, { force = true })
+                end
+            end)
+        end,
+        once = true,
+    })
 end
 
 return M
