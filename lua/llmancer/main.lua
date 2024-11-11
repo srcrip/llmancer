@@ -59,26 +59,12 @@ end
 ---@param bufnr number Buffer number to setup
 ---@param target_bufnr number Target buffer number
 local function setup_chat_buffer(bufnr, target_bufnr)
-  -- Set buffer options
-  vim.bo[bufnr].bufhidden = 'hide'
-  vim.bo[bufnr].swapfile = false
-  vim.bo[bufnr].filetype = 'llmancer'
-
-  -- Enable treesitter
-  if pcall(require, "nvim-treesitter.configs") then
-    vim.cmd([[TSBufEnable highlight]])
-    vim.cmd([[TSBufEnable indent]])
-    pcall(vim.treesitter.start, bufnr, "markdown")
-  end
-
   local chat = require('llmancer.chat')
   chat.set_target_buffer(bufnr, target_bufnr)
 
   -- Add help text
   local help_text = chat.create_help_text(bufnr)
   vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, help_text)
-
-  chat.setup_buffer_mappings(bufnr)
 end
 
 -- Generate unique chat ID
@@ -226,8 +212,7 @@ function M.open_chat(chat_id)
   
   -- Create buffer with the file path directly
   local bufnr = get_or_create_chat_buffer(chat_id)
-  setup_chat_buffer(bufnr, target_bufnr)
-
+  
   -- If this is an existing chat, load its content
   if vim.fn.filereadable(vim.api.nvim_buf_get_name(bufnr)) == 1 then
     require('llmancer.chat').load_chat(chat_id)
@@ -320,9 +305,20 @@ function M.list_chats()
               if entry.display == selected[1] then
                 -- Get current buffer as target buffer before opening chat
                 local target_bufnr = vim.api.nvim_get_current_buf()
-                local bufnr = M.open_chat(entry.chat_id)
-                -- Ensure chat buffer is properly set up
-                setup_chat_buffer(bufnr, target_bufnr)
+                
+                -- Create split first
+                if M.config.open_mode == 'vsplit' then
+                  vim.cmd('vsplit')
+                elseif M.config.open_mode == 'split' then
+                  vim.cmd('split')
+                end
+                
+                -- Load the chat (filetype handler will do the setup)
+                local chat = require('llmancer.chat')
+                local bufnr = chat.load_chat(entry.chat_id, target_bufnr)
+                if bufnr then
+                  vim.api.nvim_set_current_buf(bufnr)
+                end
                 break
               end
             end

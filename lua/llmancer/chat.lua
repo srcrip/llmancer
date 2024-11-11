@@ -27,7 +27,7 @@ M.target_buffers = {}
 
 -- Function to generate a random ID
 ---@return number
-local function generate_id()
+function M.generate_id()
   return math.floor(math.random() * 2 ^ 32)
 end
 
@@ -700,7 +700,7 @@ function M.send_message()
     M.chat_history[bufnr] = {
       {
         content = M.build_system_prompt(),
-        id = generate_id(),
+        id = M.generate_id(),
         opts = { visible = false },
         role = "system"
       }
@@ -748,7 +748,7 @@ function M.send_message()
   -- Add user message to history
   table.insert(M.chat_history[bufnr], {
     content = full_content,
-    id = generate_id(),
+    id = M.generate_id(),
     opts = { visible = true },
     role = "user",
     message_number = message_number
@@ -991,74 +991,12 @@ function M.load_chat(filename, target_bufnr)
   -- Create new buffer for chat
   local bufnr = vim.api.nvim_create_buf(true, true)
   
-  -- Extract chat ID from filename and create unique buffer name
-  local chat_id = vim.fn.fnamemodify(filename, ':t:r')
-  local base_name = string.format('LLMancer_%s', chat_id)
-  local buf_name = base_name
-  local counter = 1
-  
-  -- Try to find a unique buffer name
-  while true do
-    local exists = false
-    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_get_name(buf) == buf_name then
-        exists = true
-        break
-      end
-    end
-    
-    if not exists then
-      break
-    end
-    
-    -- If name exists, append a number and try again
-    counter = counter + 1
-    buf_name = string.format('%s_%d', base_name, counter)
-  end
-  
-  -- Set buffer options
-  vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
-  vim.api.nvim_buf_set_option(bufnr, 'swapfile', false)
-  vim.api.nvim_buf_set_option(bufnr, 'filetype', 'llmancer')
-  
-  -- Now set the unique buffer name
-  pcall(vim.api.nvim_buf_set_name, bufnr, buf_name)
+  -- Set buffer name (this will trigger filetype detection)
+  pcall(vim.api.nvim_buf_set_name, bufnr, full_path)
   
   -- Load content from file
   local lines = vim.fn.readfile(full_path)
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-  
-  -- Set target buffer if provided
-  if target_bufnr then
-    M.target_buffers[bufnr] = target_bufnr
-  end
-  
-  -- Setup buffer mappings and features
-  M.setup_buffer_mappings(bufnr)
-  
-  -- Enable treesitter if available
-  if pcall(require, "nvim-treesitter.configs") then
-    vim.cmd([[TSBufEnable highlight]])
-    vim.cmd([[TSBufEnable indent]])
-    pcall(vim.treesitter.start, bufnr, "markdown")
-  end
-  
-  -- Switch to the buffer
-  vim.api.nvim_set_current_buf(bufnr)
-  
-  -- Initialize chat history for this buffer
-  M.chat_history[bufnr] = {
-    {
-      content = M.build_system_prompt(),
-      id = generate_id(),
-      opts = { visible = false },
-      role = "system"
-    }
-  }
-  
-  -- Move cursor to the end
-  local line_count = vim.api.nvim_buf_line_count(bufnr)
-  vim.api.nvim_win_set_cursor(0, { line_count, 0 })
   
   return bufnr
 end
