@@ -5,32 +5,15 @@
 ---@field list_chats fun() Function to list saved chats
 local M = {}
 
--- Core configuration and utilities module
----@type Config
-M.config = {
-  open_mode = 'vsplit',
-  buffer_name = 'LLMancer.nvim',
-  anthropic_api_key = os.getenv("ANTHROPIC_API_KEY"),
-  model = "claude-3-sonnet-20240229",
-  max_tokens = 4096,
-  temperature = 0.7,
-  -- system_prompt = "You are a helpful AI assistant with expertise in programming and software development.",
-  system_prompt = nil,
-  storage_dir = vim.fn.stdpath("data") .. "/llmancer/chats",
-  actions = {
-    keymap = "<leader>a",
-  },
-}
+-- At the top of the file, add:
+local utils = require('llmancer.utils')
+local config = require('llmancer.config')
 
 -- Helper functions
 -- Open buffer in appropriate split
 ---@param bufnr number Buffer number to open
 local function open_buffer_split(bufnr)
-  if M.config.open_mode == 'vsplit' then
-    vim.cmd('vsplit')
-  elseif M.config.open_mode == 'split' then
-    vim.cmd('split')
-  end
+  utils.open_split()
   vim.api.nvim_set_current_buf(bufnr)
 end
 
@@ -39,7 +22,7 @@ end
 ---@return number bufnr Buffer number
 local function get_or_create_chat_buffer(chat_name)
   -- Generate the full file path
-  local file_path = M.config.storage_dir .. '/' .. chat_name .. '.llmc'
+  local file_path = config.values.storage_dir .. '/' .. chat_name .. '.llmc'
 
   -- Check if buffer already exists for this file
   local existing_bufnr = vim.fn.bufnr(file_path)
@@ -75,7 +58,7 @@ end
 
 -- Ensure storage directory exists
 local function ensure_storage_dir()
-  vim.fn.mkdir(M.config.storage_dir, "p")
+  vim.fn.mkdir(config.values.storage_dir, "p")
 end
 
 -- Setup treesitter configuration
@@ -114,7 +97,7 @@ local function setup_buffer_actions()
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "llmancer",
     callback = function(ev)
-      vim.keymap.set("n", M.config.actions.keymap,
+      vim.keymap.set("n", config.values.actions.keymap,
         function() require('llmancer.actions').show_actions() end,
         { buffer = ev.buf, desc = "Show LLMancer actions" })
     end
@@ -124,10 +107,10 @@ end
 -- Initialize plugin with user config
 ---@param opts Config|nil
 function M.setup(opts)
-  M.config = vim.tbl_deep_extend("force", M.config, opts or {})
-
-  if not M.config.anthropic_api_key then
-    vim.notify("LLMancer: No Anthropic API key found!", vim.log.levels.ERROR)
+  local err = config.setup(opts)
+  
+  if err then
+    vim.notify("LLMancer: " .. err, vim.log.levels.ERROR)
     return
   end
 
@@ -282,13 +265,32 @@ end
 ---@param chat_id string|nil The ID of an existing chat to open
 ---@return number bufnr The buffer number of the created chat buffer
 function M.open_chat(chat_id)
+  -- Store current buffer as target before creating chat buffer
   local target_bufnr = vim.api.nvim_get_current_buf()
+  local target_name = vim.api.nvim_buf_get_name(target_bufnr)
+
+  -- Only use as target if it's a real file
+  if target_name == "" then
+    target_bufnr = nil
+  end
 
   -- Generate chat ID if not provided
   chat_id = chat_id or generate_chat_id()
 
   -- Create buffer with the file path directly
   local bufnr = get_or_create_chat_buffer(chat_id)
+
+  -- Set target buffer if we have one - do this BEFORE loading content
+  if target_bufnr then
+    require('llmancer.chat').set_target_buffer(bufnr, target_bufnr)
+    
+    -- Force create_params_text to run after setting target
+    local chat = require('llmancer.chat')
+    local params_text = chat.create_params_text()
+    if params_text then
+      vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, params_text)
+    end
+  end
 
   -- If this is an existing chat, load its content
   if vim.fn.filereadable(vim.api.nvim_buf_get_name(bufnr)) == 1 then
@@ -303,7 +305,7 @@ function M.list_chats()
   local fzf = require('fzf-lua')
 
   -- Get list of chat files
-  local chat_files = vim.fn.glob(M.config.storage_dir .. "/*.llmc", false, true)
+  local chat_files = vim.fn.glob(config.values.storage_dir .. "/*.llmc", false, true)
   if #chat_files == 0 then
     vim.notify("No saved chats found", vim.log.levels.INFO)
     return
@@ -326,32 +328,14 @@ function M.list_chats()
       end
     end
 
-    -- Extract timestamp from chat_id (format: YYYYMMDD_HHMMSS_XXXX)
-    local date_str = chat_id:match("^(%d%d%d%d%d%d%d%d_%d%d%d%d%d%d)_")
-    if not date_str then return nil end
-
-    -- Parse the timestamp (YYYYMMDD_HHMMSS)
-    local year = tonumber(date_str:sub(1, 4))
-    local month = tonumber(date_str:sub(5, 6))
-    local day = tonumber(date_str:sub(7, 8))
-    local hour = tonumber(date_str:sub(10, 11))
-    local min = tonumber(date_str:sub(12, 13))
-    local sec = tonumber(date_str:sub(14, 15))
-
-    -- Create timestamp using os.time
-    local timestamp = os.time({
-      year = year,
-      month = month,
-      day = day,
-      hour = hour,
-      min = min,
-      sec = sec
-    })
+    -- Use utils functions for timestamp handling
+    local timestamp = utils.parse_chat_id(chat_id)
+    if not timestamp then return nil end
 
     return {
       chat_id = chat_id,
       preview = preview,
-      time = os.date("%Y-%m-%d %H:%M:%S", timestamp)
+      time = utils.format_timestamp(timestamp)
     }
   end, chat_files)
 
@@ -384,9 +368,9 @@ function M.list_chats()
                 local target_bufnr = vim.api.nvim_get_current_buf()
 
                 -- Create split first
-                if M.config.open_mode == 'vsplit' then
+                if config.values.open_mode == 'vsplit' then
                   vim.cmd('vsplit')
-                elseif M.config.open_mode == 'split' then
+                elseif config.values.open_mode == 'split' then
                   vim.cmd('split')
                 end
 
@@ -413,10 +397,7 @@ end
 
 -- Function to load a chat history
 function M.load_chat()
-  local chat_dir = vim.fn.stdpath("data") .. "/llmancer/chats"
-
-  -- Ensure the directory exists
-  vim.fn.mkdir(chat_dir, "p")
+  local chat_dir = config.values.storage_dir
 
   local files = vim.fn.globpath(chat_dir, "*.llmc", false, true)
   if #files == 0 then
@@ -465,69 +446,6 @@ function M.load_chat()
       }
     }
   )
-end
-
--- Function to open chat selection menu
-function M.open_chat_menu()
-  local fzf = require('fzf-lua')
-  local chat_dir = config.storage_dir
-
-  -- Create directory if it doesn't exist
-  vim.fn.mkdir(chat_dir, "p")
-
-  -- List all .llmc files in the chat directory
-  local find_command = string.format("find '%s' -name '*.llmc' -type f", chat_dir)
-  local files = vim.fn.systemlist(find_command)
-
-  -- Format the files for display
-  local formatted_files = {}
-  for _, file in ipairs(files) do
-    local filename = vim.fn.fnamemodify(file, ':t:r')  -- Remove path and extension
-    local timestamp = filename:match("^(%d+_%d+_%d+)") -- Extract timestamp
-    if timestamp then
-      -- Convert timestamp to readable format
-      local year = timestamp:sub(1, 4)
-      local month = timestamp:sub(5, 6)
-      local day = timestamp:sub(7, 8)
-      local hour = timestamp:sub(10, 11)
-      local min = timestamp:sub(12, 13)
-      local sec = timestamp:sub(14, 15)
-      local readable = string.format("%s-%s-%s %s:%s:%s", year, month, day, hour, min, sec)
-      table.insert(formatted_files, {
-        display = readable,
-        filename = filename,
-        path = file
-      })
-    end
-  end
-
-  -- Sort files by timestamp (newest first)
-  table.sort(formatted_files, function(a, b)
-    return a.filename > b.filename
-  end)
-
-  -- Create display list and lookup table
-  local display_list = {}
-  local lookup = {}
-  for _, item in ipairs(formatted_files) do
-    table.insert(display_list, item.display)
-    lookup[item.display] = item.filename
-  end
-
-  -- Show FZF picker
-  fzf.fzf_exec(display_list, {
-    prompt = "Select Chat > ",
-    actions = {
-      ["default"] = function(selected)
-        if selected and selected[1] then
-          local filename = lookup[selected[1]]
-          if filename then
-            M.open_chat(filename)
-          end
-        end
-      end
-    }
-  })
 end
 
 return M

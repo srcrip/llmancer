@@ -15,7 +15,11 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```lua
 {
     'jpmcb/LLMancer.nvim',
-    dependencies = { "nvim-lua/plenary.nvim" },
+    dependencies = {
+        "nvim-lua/plenary.nvim",
+        -- required for listing past chats (telescope coming soon)
+        "ibhagwan/fzf-lua"
+    },
     config = function()
         require('llmancer').setup({
             anthropic_api_key = 'your-api-key-here', -- Required

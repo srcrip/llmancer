@@ -71,11 +71,11 @@ end
 ---@param content string The plan content
 local function create_plan_buffer(content)
     -- Create a unique filename in the storage directory
-    local config = require('llmancer.main').config
+    local config = require('llmancer.config').config
     local plan_dir = config.storage_dir .. "/plans"
     vim.fn.mkdir(plan_dir, "p")
     local plan_name = plan_dir .. "/plan_" .. os.date("%Y%m%d_%H%M%S") .. ".txt"
-    
+
     local bufnr = vim.api.nvim_create_buf(true, false)
     vim.api.nvim_buf_set_name(bufnr, plan_name)
 
@@ -117,7 +117,7 @@ local function create_plan_buffer(content)
         style = 'minimal',
         border = 'rounded'
     }
-    
+
     local win_id = vim.api.nvim_open_win(bufnr, true, win_opts)
 
     -- Enable treesitter highlighting for the buffer
@@ -300,7 +300,7 @@ function M.apply_block_under_cursor(bufnr)
     while start_line > help_text_lines and not lines[start_line]:match("^file:") do
         start_line = start_line - 1
     end
-    
+
     -- Find the end of the block (next file: line or EOF)
     while end_line < #lines do
         end_line = end_line + 1
@@ -363,14 +363,14 @@ end
 ---@param callback fun(response: string|nil) Callback function with response
 local function get_operations_from_llm(message, callback)
     local Job = require('plenary.job')
-    local config = require('llmancer.main').config
+    local config = require('llmancer.config').config
 
     -- Prepare request body
     local body = vim.fn.json_encode({
         model = config.model,
         max_tokens = config.max_tokens,
         temperature = config.temperature,
-        messages = {{ role = "user", content = message }},
+        messages = { { role = "user", content = message } },
         stream = false, -- No streaming needed for this
     })
 
@@ -410,11 +410,11 @@ end
 function M.create_plan(code_blocks, target_buffers)
     -- Create the plan buffer immediately with help text and initial message
     local bufnr = create_plan_buffer("Generating plan...")
-    
+
     -- Start thinking indicator
     local main = require('llmancer.main')
     local stop_thinking = main.create_thinking_indicator(bufnr)
-    
+
     -- Prepare buffer context
     local buffer_context = {}
     for _, bufnr in ipairs(target_buffers) do
@@ -490,17 +490,17 @@ function M.create_plan(code_blocks, target_buffers)
     get_operations_from_llm(prompt, function(response)
         -- Stop thinking indicator
         stop_thinking()
-        
+
         if response then
             -- Update buffer content with response only (help text is already there)
             local lines = vim.split(response, '\n')
             vim.api.nvim_buf_set_lines(bufnr, #vim.split(HELP_TEXT, '\n'), -1, false, lines)
         else
             -- Show error message (help text is already there)
-            vim.api.nvim_buf_set_lines(bufnr, #vim.split(HELP_TEXT, '\n'), -1, false, {"Failed to get plan from LLM"})
+            vim.api.nvim_buf_set_lines(bufnr, #vim.split(HELP_TEXT, '\n'), -1, false, { "Failed to get plan from LLM" })
         end
     end)
-    
+
     return bufnr
 end
 
@@ -514,13 +514,13 @@ local function setup_floating_buffer(bufnr, filetype)
     vim.bo[bufnr].filetype = filetype
 
     -- Add keymaps to close window
-    vim.api.nvim_buf_set_keymap(bufnr, 'n', 'q', 
-        [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]], 
+    vim.api.nvim_buf_set_keymap(bufnr, 'n', 'q',
+        [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]],
         { noremap = true, silent = true })
-    vim.api.nvim_buf_set_keymap(bufnr, 'n', '<Esc>', 
-        [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]], 
+    vim.api.nvim_buf_set_keymap(bufnr, 'n', '<Esc>',
+        [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]],
         { noremap = true, silent = true })
-    
+
     -- Add keymap for applying block under cursor
     vim.api.nvim_buf_set_keymap(bufnr, 'n', '<CR>',
         [[<cmd>lua require('llmancer.application_plan').apply_block_under_cursor(vim.api.nvim_get_current_buf())<CR>]],

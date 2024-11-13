@@ -14,7 +14,7 @@
 ---@field build_system_prompt fun():string Function to build system prompt with current context
 local M = {}
 
-local config = require('llmancer.main').config
+local config = require('llmancer.config').values
 local main = require('llmancer.main')
 
 -- Store chat history for each buffer
@@ -215,10 +215,10 @@ end
 -- Move save_chat to be part of the module instead of local
 function M.save_chat(bufnr)
   local chat_name = vim.api.nvim_buf_get_name(bufnr)
-  
+
   -- Extract just the filename without extension from the full path
   local chat_id = vim.fn.fnamemodify(chat_name, ':t:r')
-  
+
   if not chat_id then
     vim.notify("Could not extract chat ID from buffer name: " .. chat_name, vim.log.levels.ERROR)
     return
@@ -227,7 +227,7 @@ function M.save_chat(bufnr)
   -- Since we're already using the full path as the buffer name, we can just write to it directly
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local success = vim.fn.writefile(lines, chat_name)
-  
+
   if success == 0 then
     vim.notify("Chat saved to " .. chat_name, vim.log.levels.DEBUG)
   else
@@ -440,11 +440,11 @@ local function setup_floating_buffer(bufnr, filetype)
   vim.bo[bufnr].filetype = filetype
 
   -- Add keymaps to close window
-  vim.api.nvim_buf_set_keymap(bufnr, 'n', 'q', 
-    [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]], 
+  vim.api.nvim_buf_set_keymap(bufnr, 'n', 'q',
+    [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]],
     { noremap = true, silent = true })
-  vim.api.nvim_buf_set_keymap(bufnr, 'n', '<Esc>', 
-    [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]], 
+  vim.api.nvim_buf_set_keymap(bufnr, 'n', '<Esc>',
+    [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]],
     { noremap = true, silent = true })
 
   -- Add autocmd to properly clean up buffer when window is closed
@@ -480,18 +480,19 @@ function M.view_conversation()
   -- Convert history to string
   local content = vim.fn.json_encode(history)
   -- Pretty print the JSON with fallback if jq is not available
-  local jq_result = vim.fn.system('which jq >/dev/null 2>&1 && echo ' .. vim.fn.shellescape(content) .. ' | jq . || echo ' .. vim.fn.shellescape(content))
+  local jq_result = vim.fn.system('which jq >/dev/null 2>&1 && echo ' ..
+  vim.fn.shellescape(content) .. ' | jq . || echo ' .. vim.fn.shellescape(content))
 
   -- Set content
   local lines = vim.split(jq_result, '\n')
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 end
 
--- Update the create_params_text function
-local function create_params_text()
+-- Change from local function to M.create_params_text
+function M.create_params_text()
   local chat_bufnr = vim.api.nvim_get_current_buf()
   local target_bufnr = M.target_buffers[chat_bufnr]
-
+  
   local params_table = {
     params = {
       model = config.model,
@@ -596,6 +597,7 @@ end
 ---@param target_bufnr number|nil The target buffer number (defaults to alternate buffer)
 function M.set_target_buffer(chat_bufnr, target_bufnr)
   target_bufnr = target_bufnr or vim.fn.bufnr('#')
+  
   if target_bufnr ~= -1 and vim.api.nvim_buf_is_valid(target_bufnr) then
     M.target_buffers[chat_bufnr] = target_bufnr
   end
@@ -790,10 +792,10 @@ function M.send_message()
   end
 end
 
--- Update the create_help_text function to remove both lines
+-- Update the create_help_text function to use M.create_params_text
 local function create_help_text(chat_bufnr)
   -- Combine params and help text
-  local text = create_params_text()
+  local text = M.create_params_text()
   vim.list_extend(text, {
     "",
     "Welcome to LLMancer.nvim! 🤖",
@@ -863,14 +865,14 @@ local function setup_buffer_mappings(bufnr)
     { noremap = true, silent = true, desc = "Show system prompt" })
 
   vim.api.nvim_buf_set_keymap(bufnr, 'n', 'ga',
-      [[<cmd>lua require('llmancer.chat').create_plan_from_last_response()<CR>]],
-      { noremap = true, silent = true, desc = "Create plan from last response" })
-      
+    [[<cmd>lua require('llmancer.chat').create_plan_from_last_response()<CR>]],
+    { noremap = true, silent = true, desc = "Create plan from last response" })
+
   -- Add the range command
   vim.api.nvim_buf_create_user_command(bufnr, 'LLMancerPlan', function(opts)
-      local start = opts.line1
-      local end_line = opts.line2
-      require('llmancer.chat').create_plan_from_range(start, end_line)
+    local start = opts.line1
+    local end_line = opts.line2
+    require('llmancer.chat').create_plan_from_range(start, end_line)
   end, { range = true, desc = "Create application plan from range" })
 end
 
@@ -879,9 +881,9 @@ end
 ---@param end_line number Ending line number (1-based)
 ---@return string content The text content from the range
 local function get_range_content(start, end_line)
-    local bufnr = vim.api.nvim_get_current_buf()
-    local lines = vim.api.nvim_buf_get_lines(bufnr, start - 1, end_line, false)
-    return table.concat(lines, '\n')
+  local bufnr = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(bufnr, start - 1, end_line, false)
+  return table.concat(lines, '\n')
 end
 
 -- Function to get the last LLM response
@@ -889,86 +891,84 @@ end
 ---@return number|nil start_line The starting line of the response
 ---@return number|nil end_line The ending line of the response
 local function get_last_llm_response()
-    local bufnr = vim.api.nvim_get_current_buf()
-    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-    local start_line, end_line
-    
-    -- Find the last model response by scanning backwards
-    for i = #lines, 1, -1 do
-        local line = lines[i]
-        -- Look for the model prefix followed by a colon and optional space
-        if line:match("^" .. vim.pesc(config.model) .. ":%s*") then
-            start_line = i
-            -- Find the end of this response (next user prompt or EOF)
-            end_line = #lines -- Default to end of buffer
-            for j = i + 1, #lines do
-                if lines[j]:match("^user %(%d+%)") then
-                    end_line = j - 1
-                    break
-                end
-            end
-            break
+  local bufnr = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local start_line, end_line
+
+  -- Find the last model response by scanning backwards
+  for i = #lines, 1, -1 do
+    local line = lines[i]
+    -- Look for the model prefix followed by a colon and optional space
+    if line:match("^" .. vim.pesc(config.model) .. ":%s*") then
+      start_line = i
+      -- Find the end of this response (next user prompt or EOF)
+      end_line = #lines       -- Default to end of buffer
+      for j = i + 1, #lines do
+        if lines[j]:match("^user %(%d+%)") then
+          end_line = j - 1
+          break
         end
+      end
+      break
     end
-    
-    if start_line and end_line then
-        local content = table.concat(vim.list_slice(lines, start_line, end_line), '\n')
-        -- Remove the model prefix from the first line
-        content = content:gsub("^" .. vim.pesc(config.model) .. ":%s*", "")
-        return content, start_line, end_line
-    end
-    
-    return nil
+  end
+
+  if start_line and end_line then
+    local content = table.concat(vim.list_slice(lines, start_line, end_line), '\n')
+    -- Remove the model prefix from the first line
+    content = content:gsub("^" .. vim.pesc(config.model) .. ":%s*", "")
+    return content, start_line, end_line
+  end
+
+  return nil
 end
 
 -- Function to create application plan from range
 ---@param start number Starting line number (1-based)
 ---@param end_line number Ending line number (1-based)
 function M.create_plan_from_range(start, end_line)
-    local content = get_range_content(start, end_line)
-    local bufnr = vim.api.nvim_get_current_buf()
-    local target_bufnr = M.target_buffers[bufnr]
-    
-    if not target_bufnr then
-        vim.notify("No target buffer associated with this chat", vim.log.levels.ERROR)
-        return
-    end
-    
-    -- Create plan using the existing function
-    local app_plan = require('llmancer.application_plan')
-    app_plan.create_plan(
-        {content},
-        {target_bufnr}
-    )
+  local content = get_range_content(start, end_line)
+  local bufnr = vim.api.nvim_get_current_buf()
+  local target_bufnr = M.target_buffers[bufnr]
+
+  if not target_bufnr then
+    vim.notify("No target buffer associated with this chat", vim.log.levels.ERROR)
+    return
+  end
+
+  -- Create plan using the existing function
+  local app_plan = require('llmancer.application_plan')
+  app_plan.create_plan(
+    { content },
+    { target_bufnr }
+  )
 end
 
 -- Function to create application plan from last response
 function M.create_plan_from_last_response()
-    local content = get_last_llm_response()
-    if not content then
-        vim.notify("No LLM response found", vim.log.levels.ERROR)
-        return
-    end
-    
-    local bufnr = vim.api.nvim_get_current_buf()
-    local target_bufnr = M.target_buffers[bufnr]
-    
-    if not target_bufnr then
-        vim.notify("No target buffer associated with this chat", vim.log.levels.ERROR)
-        return
-    end
-    
-    -- Create plan using the existing function
-    local app_plan = require('llmancer.application_plan')
-    app_plan.create_plan(
-        {content},
-        {target_bufnr}
-    )
+  local content = get_last_llm_response()
+  if not content then
+    vim.notify("No LLM response found", vim.log.levels.ERROR)
+    return
+  end
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local target_bufnr = M.target_buffers[bufnr]
+
+  if not target_bufnr then
+    vim.notify("No target buffer associated with this chat", vim.log.levels.ERROR)
+    return
+  end
+
+  -- Create plan using the existing function
+  local app_plan = require('llmancer.application_plan')
+  app_plan.create_plan(
+    { content },
+    { target_bufnr }
+  )
 end
 
--- Function to load a saved chat
----@param filename string The path to the chat file
----@param target_bufnr number|nil The target buffer number
+-- Update load_chat function to use config.values
 function M.load_chat(filename, target_bufnr)
   -- Ensure we have the full path and .llmc extension
   local full_path
@@ -979,7 +979,7 @@ function M.load_chat(filename, target_bufnr)
     if not filename:match("%.llmc$") then
       filename = filename .. ".llmc"
     end
-    full_path = config.storage_dir .. '/' .. filename
+    full_path = config.values.storage_dir .. '/' .. filename
   end
 
   -- Check if file exists
@@ -990,14 +990,14 @@ function M.load_chat(filename, target_bufnr)
 
   -- Create new buffer for chat
   local bufnr = vim.api.nvim_create_buf(true, true)
-  
+
   -- Set buffer name (this will trigger filetype detection)
   pcall(vim.api.nvim_buf_set_name, bufnr, full_path)
-  
+
   -- Load content from file
   local lines = vim.fn.readfile(full_path)
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-  
+
   return bufnr
 end
 
