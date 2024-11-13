@@ -15,4 +15,5 @@ vim.filetype.add({
   extension = {
     llmc = "llmancer"
   },
-}) 
+})
+

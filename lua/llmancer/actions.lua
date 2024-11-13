@@ -4,24 +4,24 @@ local M = {}
 local function find_code_block_boundaries(cursor_line, lines)
   local start_line = cursor_line
   local end_line = cursor_line
-  
-  while start_line > 1 and not lines[start_line-1]:match("^```") do
+
+  while start_line > 1 and not lines[start_line - 1]:match("^```") do
     start_line = start_line - 1
   end
-  
-  while end_line < #lines and not lines[end_line+1]:match("^```") do
+
+  while end_line < #lines and not lines[end_line + 1]:match("^```") do
     end_line = end_line + 1
   end
-  
-  if start_line >= 1 and end_line <= #lines and 
-     lines[start_line-1]:match("^```") and lines[end_line+1]:match("^```") then
+
+  if start_line >= 1 and end_line <= #lines and
+      lines[start_line - 1]:match("^```") and lines[end_line + 1]:match("^```") then
     return start_line, end_line
   end
   return nil, nil
 end
 
 local function extract_code_block(lines, start_line, end_line)
-  local lang = lines[start_line-1]:match("^```(.+)$")
+  local lang = lines[start_line - 1]:match("^```(.+)$")
   local block = table.concat(vim.list_slice(lines, start_line, end_line), "\n")
   return block, lang
 end
@@ -31,7 +31,7 @@ local function get_code_block_under_cursor()
   local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   local start_line, end_line = find_code_block_boundaries(cursor_line, lines)
-  
+
   if start_line and end_line then
     return extract_code_block(lines, start_line, end_line)
   end
@@ -42,7 +42,7 @@ end
 local function get_valid_buffers()
   return vim.tbl_filter(function(bufnr)
     return vim.api.nvim_buf_is_loaded(bufnr)
-      and vim.bo[bufnr].buftype == ""
+        and vim.bo[bufnr].buftype == ""
   end, vim.api.nvim_list_bufs())
 end
 
@@ -66,8 +66,8 @@ local function show_buffer_selection(items, code_block)
     function(choice)
       if choice then
         require('llmancer.application_plan').create_plan(
-          {code_block},
-          {choice.bufnr}
+          { code_block },
+          { choice.bufnr }
         )
       end
     end
@@ -81,10 +81,10 @@ local function apply_to_alternate_buffer(code_block)
     vim.notify("No alternate buffer available", vim.log.levels.ERROR)
     return
   end
-  
+
   require('llmancer.application_plan').create_plan(
-    {code_block},
-    {alt_bufnr}
+    { code_block },
+    { alt_bufnr }
   )
 end
 
@@ -141,9 +141,10 @@ function M.show_actions()
     vim.notify("No code block found under cursor", vim.log.levels.WARN)
     return
   end
-  
+
   local action_items = format_action_items(actions)
   show_action_selection(action_items, code_block)
 end
 
-return M 
+return M
+
