@@ -40,7 +40,7 @@ end
 local function get_or_create_chat_buffer(chat_name)
   -- Generate the full file path
   local file_path = M.config.storage_dir .. '/' .. chat_name .. '.llmc'
-  
+
   -- Check if buffer already exists for this file
   local existing_bufnr = vim.fn.bufnr(file_path)
   if existing_bufnr ~= -1 then
@@ -49,7 +49,7 @@ local function get_or_create_chat_buffer(chat_name)
   end
 
   -- Create new buffer with the full file path
-  local bufnr = vim.api.nvim_create_buf(true, false)  -- Listed buffer, not scratch
+  local bufnr = vim.api.nvim_create_buf(true, false) -- Listed buffer, not scratch
   vim.api.nvim_buf_set_name(bufnr, file_path)
   open_buffer_split(bufnr)
   return bufnr
@@ -155,7 +155,7 @@ function M.setup(opts)
       -- Ensure required modules are loaded
       local ok1, chat = pcall(require, 'llmancer.chat')
       local ok2, main = pcall(require, 'llmancer.main')
-      
+
       if not (ok1 and ok2) then
         vim.notify("Failed to load required modules", vim.log.levels.ERROR)
         return
@@ -283,13 +283,13 @@ end
 ---@return number bufnr The buffer number of the created chat buffer
 function M.open_chat(chat_id)
   local target_bufnr = vim.api.nvim_get_current_buf()
-  
+
   -- Generate chat ID if not provided
   chat_id = chat_id or generate_chat_id()
-  
+
   -- Create buffer with the file path directly
   local bufnr = get_or_create_chat_buffer(chat_id)
-  
+
   -- If this is an existing chat, load its content
   if vim.fn.filereadable(vim.api.nvim_buf_get_name(bufnr)) == 1 then
     require('llmancer.chat').load_chat(chat_id)
@@ -382,14 +382,14 @@ function M.list_chats()
               if entry.display == selected[1] then
                 -- Get current buffer as target buffer before opening chat
                 local target_bufnr = vim.api.nvim_get_current_buf()
-                
+
                 -- Create split first
                 if M.config.open_mode == 'vsplit' then
                   vim.cmd('vsplit')
                 elseif M.config.open_mode == 'split' then
                   vim.cmd('split')
                 end
-                
+
                 -- Load the chat (filetype handler will do the setup)
                 local chat = require('llmancer.chat')
                 local bufnr = chat.load_chat(entry.chat_id, target_bufnr)
@@ -486,12 +486,12 @@ function M.open_chat_menu()
     local timestamp = filename:match("^(%d+_%d+_%d+)") -- Extract timestamp
     if timestamp then
       -- Convert timestamp to readable format
-      local year = timestamp:sub(1,4)
-      local month = timestamp:sub(5,6)
-      local day = timestamp:sub(7,8)
-      local hour = timestamp:sub(10,11)
-      local min = timestamp:sub(12,13)
-      local sec = timestamp:sub(14,15)
+      local year = timestamp:sub(1, 4)
+      local month = timestamp:sub(5, 6)
+      local day = timestamp:sub(7, 8)
+      local hour = timestamp:sub(10, 11)
+      local min = timestamp:sub(12, 13)
+      local sec = timestamp:sub(14, 15)
       local readable = string.format("%s-%s-%s %s:%s:%s", year, month, day, hour, min, sec)
       table.insert(formatted_files, {
         display = readable,
