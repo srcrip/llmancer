@@ -901,6 +901,12 @@ function M.load_chat(chat_id, target_bufnr)
     M.set_target_buffer(bufnr, target_bufnr)
   end
 
+  -- Move cursor to end of buffer
+  vim.schedule(function()
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    vim.api.nvim_win_set_cursor(0, {line_count, 0})
+  end)
+
   return bufnr
 end
 

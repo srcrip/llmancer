@@ -108,7 +108,7 @@ end
 ---@param opts Config|nil
 function M.setup(opts)
   local err = config.setup(opts)
-
+  
   if err then
     vim.notify("LLMancer: " .. err, vim.log.levels.ERROR)
     return
@@ -186,7 +186,7 @@ function M.setup(opts)
       if is_new_buffer then
         -- Create params text after target buffer is set
         local params_text = chat.create_params_text()
-
+        
         -- Then add help text
         local help_text = {
           "",
@@ -202,10 +202,10 @@ function M.setup(opts)
           "----------------------------------------",
           "",
         }
-
+        
         -- Combine params and help text
         vim.list_extend(params_text, help_text)
-
+        
         -- Set the buffer content
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, params_text)
       end
@@ -312,6 +312,12 @@ function M.open_chat(chat_id)
       chat.set_target_buffer(bufnr, target_bufnr)
     end
   end
+
+  -- Move cursor to end of buffer
+  vim.schedule(function()
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    vim.api.nvim_win_set_cursor(0, {line_count, 0})
+  end)
 
   return bufnr
 end
