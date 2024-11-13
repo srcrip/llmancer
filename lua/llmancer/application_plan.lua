@@ -417,10 +417,10 @@ function M.create_plan(code_blocks, target_buffers)
 
     -- Prepare buffer context
     local buffer_context = {}
-    for _, bufnr in ipairs(target_buffers) do
-        local filename = vim.api.nvim_buf_get_name(bufnr)
+    for _, target_bufnr in ipairs(target_buffers) do
+        local filename = vim.api.nvim_buf_get_name(target_bufnr)
         table.insert(buffer_context,
-            "Filename " .. filename .. " content:\n```\n" .. get_buffer_content(bufnr) .. "\n```")
+            "Filename " .. filename .. " content:\n```\n" .. get_buffer_content(target_bufnr) .. "\n```")
     end
 
     -- Build prompt

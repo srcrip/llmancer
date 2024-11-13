@@ -38,18 +38,6 @@ local function get_or_create_chat_buffer(chat_name)
   return bufnr
 end
 
--- Setup chat buffer options and features
----@param bufnr number Buffer number to setup
----@param target_bufnr number Target buffer number
-local function setup_chat_buffer(bufnr, target_bufnr)
-  local chat = require('llmancer.chat')
-  chat.set_target_buffer(bufnr, target_bufnr)
-
-  -- Add help text
-  local help_text = chat.create_help_text(bufnr)
-  vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, help_text)
-end
-
 -- Generate unique chat ID
 ---@return string
 local function generate_chat_id()
@@ -108,7 +96,7 @@ end
 ---@param opts Config|nil
 function M.setup(opts)
   local err = config.setup(opts)
-  
+
   if err then
     vim.notify("LLMancer: " .. err, vim.log.levels.ERROR)
     return
@@ -119,9 +107,9 @@ function M.setup(opts)
   setup_buffer_actions()
 
   -- Create global command for range-based plan creation
-  vim.api.nvim_create_user_command('LLMancerPlan', function(opts)
-    local start = opts.line1
-    local end_line = opts.line2
+  vim.api.nvim_create_user_command('LLMancerPlan', function(command_opts)
+    local start = command_opts.line1
+    local end_line = command_opts.line2
     require('llmancer.chat').create_plan_from_range(start, end_line)
   end, { range = true, desc = "Create application plan from range" })
 
@@ -135,14 +123,16 @@ function M.setup(opts)
     callback = function(ev)
       local bufnr = ev.buf
 
-      -- Ensure required modules are loaded
-      local ok1, chat = pcall(require, 'llmancer.chat')
-      local ok2, main = pcall(require, 'llmancer.main')
+      -- -- Ensure required modules are loaded
+      -- local ok1, chat = pcall(require, 'llmancer.chat')
+      -- local ok2, main = pcall(require, 'llmancer.main')
 
-      if not (ok1 and ok2) then
-        vim.notify("Failed to load required modules", vim.log.levels.ERROR)
-        return
-      end
+      local chat = require('llmancer.chat')
+
+      -- if not (ok1 and ok2) then
+      --   vim.notify("Failed to load required modules", vim.log.levels.ERROR)
+      --   return
+      -- end
 
       -- Set buffer options
       vim.bo[bufnr].bufhidden = 'hide'
@@ -186,7 +176,7 @@ function M.setup(opts)
       if is_new_buffer then
         -- Create params text after target buffer is set
         local params_text = chat.create_params_text()
-        
+
         -- Then add help text
         local help_text = {
           "",
@@ -202,10 +192,10 @@ function M.setup(opts)
           "----------------------------------------",
           "",
         }
-        
+
         -- Combine params and help text
         vim.list_extend(params_text, help_text)
-        
+
         -- Set the buffer content
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, params_text)
       end
@@ -316,7 +306,7 @@ function M.open_chat(chat_id)
   -- Move cursor to end of buffer
   vim.schedule(function()
     local line_count = vim.api.nvim_buf_line_count(bufnr)
-    vim.api.nvim_win_set_cursor(0, {line_count, 0})
+    vim.api.nvim_win_set_cursor(0, { line_count, 0 })
   end)
 
   return bufnr

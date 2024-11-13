@@ -220,7 +220,6 @@ function M.send_to_anthropic(message)
 
   -- Track the accumulated response
   local accumulated_text = ""
-  local response_started = false
   local message_number = message[1] and message[1].message_number
 
   -- Prepare request body
@@ -348,24 +347,6 @@ local function get_latest_user_message()
   return table.concat(content, '\n'), message_number
 end
 
--- Function to append response to buffer
----@param text string The text to append
----@param message_type "user"|"llm" The type of message
----@param message_number number|nil The message number (for user messages)
-local function append_to_buffer(text, message_type, message_number)
-  local bufnr = vim.api.nvim_get_current_buf()
-  local prefix = ""
-
-  if message_type == "user" then
-    prefix = string.format("user (%d): ", message_number)
-  elseif message_type == "llm" then
-    prefix = config.values.model .. ": "
-  end
-
-  local lines = vim.split(prefix .. text, '\n')
-  vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
-end
-
 -- Helper function to create floating window
 local function create_floating_window(title)
   -- Get editor dimensions
@@ -433,7 +414,8 @@ function M.view_conversation()
 
   -- Create and open floating window with title
   local win_opts = create_floating_window(" Chat History ")
-  local win = vim.api.nvim_open_win(bufnr, true, win_opts)
+
+  vim.api.nvim_open_win(bufnr, true, win_opts)
 
   -- Setup buffer options and mappings
   setup_floating_buffer(bufnr, 'llmancer')
@@ -566,51 +548,6 @@ function M.set_target_buffer(chat_bufnr, target_bufnr)
   end
 end
 
--- Update the get_file_context function to handle the new structure
----@return string
-local function get_file_context()
-  local chat_bufnr = vim.api.nvim_get_current_buf()
-  local context_lines = {}
-
-  -- Get params from buffer to check context configuration
-  local params = get_buffer_config(chat_bufnr)
-  if params and params.context then
-    -- Handle files context
-    if params.context.files then
-      for _, file in ipairs(params.context.files) do
-        if vim.fn.filereadable(file) == 1 then
-          local content = table.concat(vim.fn.readfile(file), '\n')
-          table.insert(context_lines, string.format("File: %s\n%s", file, content))
-        end
-      end
-    end
-
-    -- Handle global context
-    if params.context.global then
-      for _, item in ipairs(params.context.global) do
-        if type(item) == "function" then
-          local success, files = pcall(item)
-          if success and type(files) == "table" then
-            for _, f in ipairs(files) do
-              if vim.fn.filereadable(f) == 1 then
-                local content = table.concat(vim.fn.readfile(f), '\n')
-                table.insert(context_lines, string.format("File: %s\n%s", f, content))
-              end
-            end
-          end
-        end
-      end
-    end
-  end
-
-  -- If we have context, format it with separators
-  if #context_lines > 0 then
-    return "---\n" .. table.concat(context_lines, "\n\n") .. "\n---\n\n"
-  end
-
-  return ""
-end
-
 -- Update send_message to use the new function
 function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
@@ -687,13 +624,12 @@ function M.send_message()
   -- Add blank lines before sending request to position the thinking indicator
   vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", "" })
 
-  -- Auto-scroll if we were near the bottom
-  if is_near_bottom then
-    vim.schedule(function()
-      vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(bufnr), 0 })
-      vim.cmd('normal! zz')
-    end)
-  end
+  -- todo: add a config option to disable this
+  -- Auto-scroll to bottom
+  vim.schedule(function()
+    vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(bufnr), 0 })
+    vim.cmd('normal! zz')
+  end)
 
   -- Start thinking animation
   local stop_thinking = main.create_thinking_indicator(bufnr)
@@ -739,7 +675,8 @@ local function show_system_prompt()
 
   -- Create and open floating window with title
   local win_opts = create_floating_window(" System Prompt ")
-  local win = vim.api.nvim_open_win(bufnr, true, win_opts)
+
+  vim.api.nvim_open_win(bufnr, true, win_opts)
 
   -- Setup buffer options and mappings
   setup_floating_buffer(bufnr, 'markdown')

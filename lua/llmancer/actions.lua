@@ -108,7 +108,7 @@ local actions = {
   }
 }
 
-local function format_action_items(actions)
+local function format_action_items(items)
   return vim.tbl_map(function(action)
     return {
       name = action.name,
@@ -116,7 +116,7 @@ local function format_action_items(actions)
       callback = action.callback,
       display = string.format("%s - %s", action.name, action.description)
     }
-  end, actions)
+  end, items)
 end
 
 local function show_action_selection(action_items, code_block)
@@ -147,4 +147,3 @@ function M.show_actions()
 end
 
 return M
-

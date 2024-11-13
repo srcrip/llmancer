@@ -33,4 +33,5 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
     callback = function()
         require('specs.helpers').reset_env()
     end,
-}) 
+})
+

@@ -5,10 +5,10 @@ local M = {}
 local function get_git_root()
     local handle = io.popen("git rev-parse --show-toplevel 2>/dev/null")
     if not handle then return nil end
-    
+
     local result = handle:read("*a")
     handle:close()
-    
+
     if result then
         return vim.trim(result)
     end
@@ -25,7 +25,7 @@ local function get_files_with_tree(dir)
     -- --noreport: Don't print file/directory report at the end
     local handle = io.popen('tree -f -a --noreport "' .. dir .. '" 2>/dev/null')
     if not handle then return "", {} end
-    
+
     local tree_output = {}
     local files = {}
     local exclude_patterns = {
@@ -40,11 +40,11 @@ local function get_files_with_tree(dir)
         "%.swp$",
         "%.swo$"
     }
-    
+
     for line in handle:lines() do
         -- Extract the file path from the tree output line
         local file_path = line:match("── (.+)$")
-        
+
         if file_path then
             local exclude = false
             for _, pattern in ipairs(exclude_patterns) do
@@ -53,7 +53,7 @@ local function get_files_with_tree(dir)
                     break
                 end
             end
-            
+
             if not exclude then
                 table.insert(files, file_path)
                 table.insert(tree_output, line)
@@ -63,7 +63,7 @@ local function get_files_with_tree(dir)
             table.insert(tree_output, line)
         end
     end
-    
+
     handle:close()
     return table.concat(tree_output, '\n'), files
 end
@@ -74,10 +74,10 @@ function M.codebase()
     local root = get_git_root() or vim.fn.getcwd()
     local tree_output, files = get_files_with_tree(root)
     local contents = {}
-    
+
     -- Start with the tree output
     table.insert(contents, "Project Structure:\n" .. tree_output)
-    
+
     -- Add each file's contents
     for _, file in ipairs(files) do
         -- Only read if it's a regular file and readable
@@ -89,9 +89,8 @@ function M.codebase()
             end
         end
     end
-    
+
     return table.concat(contents, "\n")
 end
 
 return M
-

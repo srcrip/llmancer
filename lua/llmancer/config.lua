@@ -51,7 +51,7 @@ local function validate_config(config)
   end
 
   -- Validate open_mode
-  if config.open_mode and not vim.tbl_contains({'vsplit', 'split', 'enew'}, config.open_mode) then
+  if config.open_mode and not vim.tbl_contains({ 'vsplit', 'split', 'enew' }, config.open_mode) then
     return string.format("Invalid open_mode: %s (must be 'vsplit', 'split', or 'enew')", config.open_mode)
   end
 
@@ -73,7 +73,7 @@ end
 function M.setup(opts)
   -- Start with defaults
   local new_config = vim.deepcopy(defaults)
-  
+
   -- Merge user config if provided
   if opts then
     new_config = vim.tbl_deep_extend("force", new_config, opts)

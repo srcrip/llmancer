@@ -7,19 +7,19 @@ local M = {}
 function M.create_test_buffer(content, opts)
     opts = opts or {}
     local bufnr = vim.api.nvim_create_buf(false, true)
-    
+
     if content then
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, content)
     end
-    
+
     if opts.filetype then
         vim.bo[bufnr].filetype = opts.filetype
     end
-    
+
     if opts.name then
         vim.api.nvim_buf_set_name(bufnr, opts.name)
     end
-    
+
     return bufnr
 end
 
@@ -33,4 +33,4 @@ function M.reset_env()
     end
 end
 
-return M 
+return M
