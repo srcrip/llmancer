@@ -71,7 +71,7 @@ end
 ---@param content string The plan content
 local function create_plan_buffer(content)
     -- Create a unique filename in the storage directory
-    local config = require('llmancer.config').config
+    local config = require('llmancer.config').values
     local plan_dir = config.storage_dir .. "/plans"
     vim.fn.mkdir(plan_dir, "p")
     local plan_name = plan_dir .. "/plan_" .. os.date("%Y%m%d_%H%M%S") .. ".txt"
@@ -363,7 +363,7 @@ end
 ---@param callback fun(response: string|nil) Callback function with response
 local function get_operations_from_llm(message, callback)
     local Job = require('plenary.job')
-    local config = require('llmancer.config').config
+    local config = require('llmancer.config').values
 
     -- Prepare request body
     local body = vim.fn.json_encode({
