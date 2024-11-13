@@ -14,7 +14,7 @@
 ---@field build_system_prompt fun():string Function to build system prompt with current context
 local M = {}
 
-local config = require('llmancer.config').values
+local config = require('llmancer.config')
 local main = require('llmancer.main')
 
 -- Store chat history for each buffer
@@ -81,9 +81,9 @@ local function get_buffer_config(bufnr)
   if not params_text or #params_text == 0 then
     return {
       params = {
-        model = config.model,
-        max_tokens = config.max_tokens,
-        temperature = config.temperature,
+        model = config.values.model,
+        max_tokens = config.values.max_tokens,
+        temperature = config.values.temperature,
       },
       context = {
         files = {},
@@ -99,9 +99,9 @@ local function get_buffer_config(bufnr)
     vim.notify("Error parsing parameters: " .. err, vim.log.levels.WARN)
     return {
       params = {
-        model = config.model,
-        max_tokens = config.max_tokens,
-        temperature = config.temperature,
+        model = config.values.model,
+        max_tokens = config.values.max_tokens,
+        temperature = config.values.temperature,
       },
       context = {
         files = {},
@@ -112,9 +112,9 @@ local function get_buffer_config(bufnr)
 
   -- Ensure required fields exist
   result.params = result.params or {
-    model = config.model,
-    max_tokens = config.max_tokens,
-    temperature = config.temperature,
+    model = config.values.model,
+    max_tokens = config.values.max_tokens,
+    temperature = config.values.temperature,
   }
   result.context = result.context or { files = {}, global = {} }
 
@@ -170,7 +170,7 @@ local function handle_stream_chunk(chunk, bufnr, message_number, accumulated_tex
       -- For code blocks: "model_name:\n\n```..."
       -- For normal text: "model_name: text..."
       -- This ensures code blocks render properly with spacing
-      local prefix = config.model .. ":"
+      local prefix = config.values.model .. ":"
       if new_text:sub(1, 3) == "```" then
         prefix = prefix .. "\n\n" -- Add two newlines before code blocks
       else
@@ -238,7 +238,7 @@ function M.send_to_anthropic(message)
     args = {
       'https://api.anthropic.com/v1/messages',
       '-X', 'POST',
-      '-H', 'x-api-key: ' .. config.anthropic_api_key,
+      '-H', 'x-api-key: ' .. config.values.anthropic_api_key,
       '-H', 'anthropic-version: 2023-06-01',
       '-H', 'content-type: application/json',
       '-H', 'accept: text/event-stream',
@@ -359,7 +359,7 @@ local function append_to_buffer(text, message_type, message_number)
   if message_type == "user" then
     prefix = string.format("user (%d): ", message_number)
   elseif message_type == "llm" then
-    prefix = config.model .. ": "
+    prefix = config.values.model .. ": "
   end
 
   local lines = vim.split(prefix .. text, '\n')
@@ -439,7 +439,7 @@ function M.view_conversation()
   setup_floating_buffer(bufnr, 'llmancer')
 
   -- Get current chat history
-  local current_bufnr = vim.fn.bufnr(config.buffer_name)
+  local current_bufnr = vim.fn.bufnr(config.values.buffer_name)
   local history = M.chat_history[current_bufnr] or {}
 
   -- Convert history to string
@@ -460,9 +460,9 @@ function M.create_params_text()
 
   local params_table = {
     params = {
-      model = config.model,
-      max_tokens = config.max_tokens,
-      temperature = config.temperature,
+      model = config.values.model,
+      max_tokens = config.values.max_tokens,
+      temperature = config.values.temperature,
     },
     context = {
       files = {},
@@ -518,7 +518,7 @@ function add(a, b) {
 -- Update the build_system_prompt function to use the context
 function M.build_system_prompt()
   local chat_bufnr = vim.api.nvim_get_current_buf()
-  local system_context = config.system_prompt or system_role
+  local system_context = config.values.system_prompt or system_role
 
   -- Get the params table from the buffer
   local params = get_buffer_config(chat_bufnr)
@@ -803,7 +803,7 @@ local function get_last_llm_response()
   for i = #lines, 1, -1 do
     local line = lines[i]
     -- Look for the model prefix followed by a colon and optional space
-    if line:match("^" .. vim.pesc(config.model) .. ":%s*") then
+    if line:match("^" .. vim.pesc(config.values.model) .. ":%s*") then
       start_line = i
       -- Find the end of this response (next user prompt or EOF)
       end_line = #lines -- Default to end of buffer
@@ -820,7 +820,7 @@ local function get_last_llm_response()
   if start_line and end_line then
     local content = table.concat(vim.list_slice(lines, start_line, end_line), '\n')
     -- Remove the model prefix from the first line
-    content = content:gsub("^" .. vim.pesc(config.model) .. ":%s*", "")
+    content = content:gsub("^" .. vim.pesc(config.values.model) .. ":%s*", "")
     return content, start_line, end_line
   end
 
@@ -873,22 +873,16 @@ function M.create_plan_from_last_response()
 end
 
 -- Update load_chat function to use config.values
-function M.load_chat(filename, target_bufnr)
-  -- Ensure we have the full path and .llmc extension
-  local full_path
-  if vim.fn.fnamemodify(filename, ':p') == filename then
-    full_path = filename
-  else
-    -- Add .llmc extension if not present
-    if not filename:match("%.llmc$") then
-      filename = filename .. ".llmc"
-    end
-    full_path = config.values.storage_dir .. '/' .. filename
+function M.load_chat(chat_id, target_bufnr)
+  -- Ensure config is initialized with defaults if not already set
+  if not config.values then
+    config.setup()
   end
 
+  local file_path = config.values.storage_dir .. '/' .. chat_id .. '.llmc'
   -- Check if file exists
-  if vim.fn.filereadable(full_path) ~= 1 then
-    vim.notify("Cannot read file: " .. full_path, vim.log.levels.ERROR)
+  if vim.fn.filereadable(file_path) ~= 1 then
+    vim.notify("Cannot read file: " .. file_path, vim.log.levels.ERROR)
     return nil
   end
 
@@ -896,11 +890,16 @@ function M.load_chat(filename, target_bufnr)
   local bufnr = vim.api.nvim_create_buf(true, true)
 
   -- Set buffer name (this will trigger filetype detection)
-  pcall(vim.api.nvim_buf_set_name, bufnr, full_path)
+  pcall(vim.api.nvim_buf_set_name, bufnr, file_path)
 
   -- Load content from file
-  local lines = vim.fn.readfile(full_path)
+  local lines = vim.fn.readfile(file_path)
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+
+  -- Set target buffer if provided
+  if target_bufnr then
+    M.set_target_buffer(bufnr, target_bufnr)
+  end
 
   return bufnr
 end

@@ -108,7 +108,7 @@ end
 ---@param opts Config|nil
 function M.setup(opts)
   local err = config.setup(opts)
-  
+
   if err then
     vim.notify("LLMancer: " .. err, vim.log.levels.ERROR)
     return
@@ -176,16 +176,38 @@ function M.setup(opts)
         }
       end
 
-      -- Add help text only for new buffers
-      if is_new_buffer then
-        local help_text = chat.create_help_text(bufnr)
-        vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, help_text)
-      end
-
-      -- Try to determine target buffer
+      -- Try to determine target buffer first
       local target_bufnr = vim.fn.bufnr('#')
       if target_bufnr ~= -1 and target_bufnr ~= bufnr then
         chat.set_target_buffer(bufnr, target_bufnr)
+      end
+
+      -- Initialize new buffers with params and help text
+      if is_new_buffer then
+        -- Create params text after target buffer is set
+        local params_text = chat.create_params_text()
+
+        -- Then add help text
+        local help_text = {
+          "",
+          "Welcome to LLMancer.nvim! 🤖",
+          "",
+          "Shortcuts:",
+          "- <Enter> in normal mode: Send message",
+          "- gd: View conversation history",
+          "- gs: View system prompt",
+          "- ga: Create application plan from last response",
+          "",
+          "Type your message below:",
+          "----------------------------------------",
+          "",
+        }
+
+        -- Combine params and help text
+        vim.list_extend(params_text, help_text)
+
+        -- Set the buffer content
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, params_text)
       end
     end,
   })
@@ -280,21 +302,15 @@ function M.open_chat(chat_id)
   -- Create buffer with the file path directly
   local bufnr = get_or_create_chat_buffer(chat_id)
 
-  -- Set target buffer if we have one - do this BEFORE loading content
-  if target_bufnr then
-    require('llmancer.chat').set_target_buffer(bufnr, target_bufnr)
-    
-    -- Force create_params_text to run after setting target
-    local chat = require('llmancer.chat')
-    local params_text = chat.create_params_text()
-    if params_text then
-      vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, params_text)
-    end
-  end
-
   -- If this is an existing chat, load its content
   if vim.fn.filereadable(vim.api.nvim_buf_get_name(bufnr)) == 1 then
     require('llmancer.chat').load_chat(chat_id)
+  else
+    -- For new chats, set target buffer only (FileType autocmd will handle the rest)
+    if target_bufnr then
+      local chat = require('llmancer.chat')
+      chat.set_target_buffer(bufnr, target_bufnr)
+    end
   end
 
   return bufnr
