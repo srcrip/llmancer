@@ -31,33 +31,6 @@ function M.generate_id()
   return math.floor(math.random() * 2 ^ 32)
 end
 
--- Function to make API request with retry
----@param max_retries number Maximum number of retry attempts
----@param initial_delay number Initial delay in seconds
----@param request_fn fun():table|nil Function that makes the request
----@return table|nil response The API response or nil if all retries fail
-local function with_retry(max_retries, initial_delay, request_fn)
-  local delay = initial_delay
-
-  for attempt = 1, max_retries do
-    local response = request_fn()
-    if response then
-      return response
-    end
-
-    if attempt < max_retries then
-      vim.notify(string.format("Retrying in %d seconds (attempt %d/%d)...",
-        delay, attempt, max_retries), vim.log.levels.WARN)
-      vim.cmd('sleep ' .. delay * 1000 .. 'm')
-      delay = delay * 2 -- Exponential backoff
-    else
-      vim.notify('Failed after ' .. max_retries .. ' attempts', vim.log.levels.ERROR)
-    end
-  end
-
-  return nil
-end
-
 -- Parse parameters from the --- delimited section at the top of the buffer
 ---@param lines string[] The buffer lines to parse
 ---@return table|nil params The parsed parameters or nil if invalid
@@ -297,14 +270,6 @@ function M.send_to_anthropic(message)
   return job
 end
 
--- Function to get buffer content as message
----@return string content The buffer content
-local function get_buffer_content()
-  local bufnr = vim.api.nvim_get_current_buf()
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  return table.concat(lines, '\n')
-end
-
 -- Function to get the latest user message from buffer
 ---@return string content The latest user message
 ---@return number|nil message_number The message number
@@ -481,7 +446,7 @@ function M.view_conversation()
   local content = vim.fn.json_encode(history)
   -- Pretty print the JSON with fallback if jq is not available
   local jq_result = vim.fn.system('which jq >/dev/null 2>&1 && echo ' ..
-  vim.fn.shellescape(content) .. ' | jq . || echo ' .. vim.fn.shellescape(content))
+    vim.fn.shellescape(content) .. ' | jq . || echo ' .. vim.fn.shellescape(content))
 
   -- Set content
   local lines = vim.split(jq_result, '\n')
@@ -492,7 +457,7 @@ end
 function M.create_params_text()
   local chat_bufnr = vim.api.nvim_get_current_buf()
   local target_bufnr = M.target_buffers[chat_bufnr]
-  
+
   local params_table = {
     params = {
       model = config.model,
@@ -559,6 +524,18 @@ function M.build_system_prompt()
   local params = get_buffer_config(chat_bufnr)
   if not params or not params.context then return system_context end
 
+  -- Helper function to add file content to context
+  local function add_file_to_context(filepath)
+    if vim.fn.filereadable(filepath) == 1 then
+      local content = table.concat(vim.fn.readfile(filepath), '\n')
+      system_context = string.format([[%s
+
+File: %s
+Content:
+%s]], system_context, filepath, content)
+    end
+  end
+
   -- Add context for each file
   for _, file in ipairs(params.context) do
     -- Handle special case for codebase() function
@@ -566,26 +543,12 @@ function M.build_system_prompt()
       local success, files = pcall(file)
       if success and type(files) == "table" then
         for _, f in ipairs(files) do
-          if vim.fn.filereadable(f) == 1 then
-            local content = table.concat(vim.fn.readfile(f), '\n')
-            system_context = string.format([[%s
-
-File: %s
-Content:
-%s]], system_context, f, content)
-          end
+          add_file_to_context(f)
         end
       end
     else
       -- Handle regular file paths
-      if vim.fn.filereadable(file) == 1 then
-        local content = table.concat(vim.fn.readfile(file), '\n')
-        system_context = string.format([[%s
-
-File: %s
-Content:
-%s]], system_context, file, content)
-      end
+      add_file_to_context(file)
     end
   end
 
@@ -597,7 +560,7 @@ end
 ---@param target_bufnr number|nil The target buffer number (defaults to alternate buffer)
 function M.set_target_buffer(chat_bufnr, target_bufnr)
   target_bufnr = target_bufnr or vim.fn.bufnr('#')
-  
+
   if target_bufnr ~= -1 and vim.api.nvim_buf_is_valid(target_bufnr) then
     M.target_buffers[chat_bufnr] = target_bufnr
   end
@@ -646,50 +609,6 @@ local function get_file_context()
   end
 
   return ""
-end
-
--- Handle the response from the API
----@param response table|nil The response from the API
----@param bufnr number The buffer number
----@param win number The window number
----@param message_number number The message number
-local function handle_response(response, bufnr, win, message_number)
-  if not response or not response.content or not response.content[1] then
-    return
-  end
-
-  local response_text = response.content[1].text
-
-  -- Add newline before code block if response starts with ```
-  if response_text:match("^```") then
-    response_text = "\n" .. response_text
-  end
-
-  -- Add response to history
-  table.insert(M.chat_history[bufnr], {
-    content = response_text,
-    id = generate_id(),
-    opts = { visible = true },
-    role = "llm"
-  })
-
-  -- Replace the blank lines with response
-  local last_line = vim.api.nvim_buf_line_count(bufnr)
-  vim.api.nvim_buf_set_lines(bufnr, last_line - 2, last_line, false, { "" }) -- Remove extra blank line
-  append_to_buffer(response_text, "llm")
-
-  -- Add a new blank line and prompt for the next user message
-  local next_prompt = string.format("user (%d): ", message_number + 1)
-  vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", next_prompt })
-
-  -- Move cursor to the end of the prompt line and ensure it's visible
-  local line_count = vim.api.nvim_buf_line_count(bufnr)
-  vim.api.nvim_win_set_cursor(win, { line_count, #next_prompt })
-
-  -- Save chat after successful response
-  vim.schedule(function()
-    M.save_chat(bufnr)
-  end)
 end
 
 -- Update send_message to use the new function
@@ -813,21 +732,6 @@ local function create_help_text(chat_bufnr)
   return text
 end
 
--- Update the help_text variable to match
-local help_text = {
-  "Welcome to LLMancer.nvim! 🤖",
-  "",
-  "Shortcuts:",
-  "- <Enter> in normal mode: Send message",
-  "- gd: View conversation history",
-  "- gs: View system prompt",
-  "- ga: Create application plan from last response",
-  "",
-  "Type your message below:",
-  "----------------------------------------",
-  "",
-}
-
 -- Function to show system prompt in new buffer
 local function show_system_prompt()
   local bufnr = vim.api.nvim_create_buf(true, true)
@@ -902,7 +806,7 @@ local function get_last_llm_response()
     if line:match("^" .. vim.pesc(config.model) .. ":%s*") then
       start_line = i
       -- Find the end of this response (next user prompt or EOF)
-      end_line = #lines       -- Default to end of buffer
+      end_line = #lines -- Default to end of buffer
       for j = i + 1, #lines do
         if lines[j]:match("^user %(%d+%)") then
           end_line = j - 1
