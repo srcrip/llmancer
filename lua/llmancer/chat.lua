@@ -225,7 +225,7 @@ function M.save_chat(bufnr)
   end
 end
 
--- Update the send_to_anthropic function to save chat after streaming completes
+-- Update the send_to_anthropic function to include debugging
 function M.send_to_anthropic(message)
   local Job = require('plenary.job')
   local bufnr = vim.api.nvim_get_current_buf()
@@ -428,7 +428,7 @@ end
 function M.view_conversation()
   -- Get the source chat buffer number BEFORE creating the history window
   local source_bufnr = vim.api.nvim_get_current_buf()
-  
+
   local bufnr = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_buf_set_name(bufnr, 'LLMancer-History')
 
@@ -439,7 +439,7 @@ function M.view_conversation()
 
   -- Setup buffer options and mappings
   setup_floating_buffer(bufnr, 'llmancer')
-  
+
   local history = M.chat_history[source_bufnr] or {}
 
   -- Convert history to string
@@ -490,35 +490,10 @@ function M.create_params_text()
   return result
 end
 
-local system_role = [[
-Act as an expert software developer. Follow best practices and conventions:
-
-- Write clean, maintainable code
-- Use the users languages, frameworks, and libraries
-- Follow project patterns and style
-- Handle errors properly
-- Prefer modular and reusable code
-
-You are part of a system for suggesting code changes to a developer.
-
-This developer is an expert and doesn't need long explanations.
-
-Prefer to provide concise information and requested code changes.
-
-You should return code blocks like markdown style, fenced with ``` and include a syntax name like:
-
-```javascript
-function add(a, b) {
-  return a + b;
-}
-```
-
-]]
-
--- Update the build_system_prompt function to use the context
+-- Update the build_system_prompt function to use the context correctly
 function M.build_system_prompt()
   local chat_bufnr = vim.api.nvim_get_current_buf()
-  local system_context = config.values.system_prompt or system_role
+  local system_context = M.get_system_role()
 
   -- Get the params table from the buffer
   local params = get_buffer_config(chat_bufnr)
@@ -537,18 +512,20 @@ Content:
   end
 
   -- Add context for each file
-  for _, file in ipairs(params.context) do
-    -- Handle special case for codebase() function
-    if type(file) == "function" then
-      local success, files = pcall(file)
-      if success and type(files) == "table" then
-        for _, f in ipairs(files) do
-          add_file_to_context(f)
+  if params.context.files then
+    for _, file in ipairs(params.context.files) do
+      -- Handle special case for codebase() function
+      if type(file) == "function" then
+        local success, files = pcall(file)
+        if success and type(files) == "table" then
+          for _, f in ipairs(files) do
+            add_file_to_context(f)
+          end
         end
+      else
+        -- Handle regular file paths
+        add_file_to_context(file)
       end
-    else
-      -- Handle regular file paths
-      add_file_to_context(file)
     end
   end
 
@@ -566,16 +543,34 @@ function M.set_target_buffer(chat_bufnr, target_bufnr)
   end
 end
 
--- Update send_message to use the new function
+function M.get_system_role()
+  local module_path = debug.getinfo(1).source:sub(2) -- Remove @ from start
+  local base_dir = vim.fn.fnamemodify(module_path, ':h:h:h')
+  local system_prompt_path = base_dir .. '/prompts/system.xml'
+  local system_content = nil
+
+  if vim.fn.filereadable(system_prompt_path) == 1 then
+    local system_prompt_lines = vim.fn.readfile(system_prompt_path)
+    system_content = table.concat(system_prompt_lines, '\n')
+  else
+    vim.notify("System prompt not found", vim.log.levels.ERROR)
+  end
+
+  return system_content
+end
+
+-- Update send_message to include file contents in user message
 function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
   local win = vim.api.nvim_get_current_win()
 
   -- Initialize history for this buffer if it doesn't exist
   if not M.chat_history[bufnr] then
+    local system_content = M.get_system_role()
+
     M.chat_history[bufnr] = {
       {
-        content = M.build_system_prompt(),
+        content = system_content,
         id = M.generate_id(),
         opts = { visible = false },
         role = "system"
@@ -595,21 +590,46 @@ function M.send_message()
     return
   end
 
+  -- Get file contents from context
+  local params = get_buffer_config(bufnr)
+  local context_content = ""
+
+  if params and params.context and params.context.files then
+    for _, file in ipairs(params.context.files) do
+      if type(file) == "string" and vim.fn.filereadable(file) == 1 then
+        local file_content = table.concat(vim.fn.readfile(file), '\n')
+        context_content = context_content .. string.format([[
+
+<open_file>
+```:%s
+%s
+```
+</open_file>]], file, file_content)
+      end
+    end
+  end
+
+  -- Combine user message with context
+  local full_content = content
+  if context_content ~= "" then
+    full_content = context_content .. "\n\n" .. content
+  end
+
   -- Add user message to history
   table.insert(M.chat_history[bufnr], {
-    content = content,
+    content = full_content,
     id = M.generate_id(),
     opts = { visible = true },
     role = "user",
     message_number = message_number
   })
-  
+
   -- Prepare message format for API
   ---@type Message[]
   local message = {
     {
       role = "user",
-      content = content
+      content = full_content
     }
   }
 

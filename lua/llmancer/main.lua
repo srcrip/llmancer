@@ -117,6 +117,7 @@ function M.setup(opts)
   local group = vim.api.nvim_create_augroup("LLMancerSetup", { clear = true })
 
   -- Setup autocommands for llmancer filetype
+  -- todo: this should probably go into the ftdetect section
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "llmancer",
     group = group,
@@ -137,6 +138,7 @@ function M.setup(opts)
       -- Set buffer options
       vim.bo[bufnr].bufhidden = 'hide'
       vim.bo[bufnr].swapfile = false
+      vim.bo[bufnr].textwidth = 0
 
       -- Enable treesitter if available
       if pcall(require, "nvim-treesitter.configs") then
