@@ -85,9 +85,25 @@ local function setup_buffer_actions()
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "llmancer",
     callback = function(ev)
+      -- Set up the actions keymap
       vim.keymap.set("n", config.values.actions.keymap,
         function() require('llmancer.actions').show_actions() end,
         { buffer = ev.buf, desc = "Show LLMancer actions" })
+
+      -- Only set up the WinClosed autocmd if the config option is enabled
+      if config.values.close_chat_buffer_on_win_closed then
+        vim.api.nvim_create_autocmd("WinClosed", {
+          buffer = ev.buf,
+          callback = function()
+            vim.schedule(function()
+              if vim.api.nvim_buf_is_valid(ev.buf) then
+                vim.api.nvim_buf_delete(ev.buf, { force = true })
+              end
+            end)
+          end,
+          once = true  -- Only trigger once
+        })
+      end
     end
   })
 end

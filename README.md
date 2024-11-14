@@ -27,6 +27,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
             model = 'claude-3-sonnet-20240229',
             max_tokens = 4096,
             temperature = 0.7,
+            close_chat_buffer_on_win_closed = true, -- Whether to close the chat buffer when its window is closed
         })
     end,
     keys = {

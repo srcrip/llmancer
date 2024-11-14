@@ -9,6 +9,7 @@ local M = {}
 ---@field temperature number Temperature for response generation
 ---@field system_prompt string|nil System prompt for the assistant
 ---@field storage_dir string Directory to store chat histories
+---@field close_chat_buffer_on_win_closed boolean Whether to close the chat buffer when its window is closed
 ---@field actions table Action configuration
 ---@field actions.keymap string Keymap for actions menu
 
@@ -23,6 +24,7 @@ local defaults = {
   temperature = 0.7,
   system_prompt = nil,
   storage_dir = vim.fn.stdpath("data") .. "/llmancer/chats",
+  close_chat_buffer_on_win_closed = true,
   actions = {
     keymap = "<leader>a",
   },
