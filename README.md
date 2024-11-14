@@ -28,6 +28,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
             max_tokens = 4096,
             temperature = 0.7,
             close_chat_buffer_on_win_closed = true, -- Whether to close the chat buffer when its window is closed
+            add_files_to_new_chat = "all", -- Which files to add to context when creating a new chat ("all", "current", or "none")
         })
     end,
     keys = {

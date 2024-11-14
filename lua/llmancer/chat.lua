@@ -17,6 +17,11 @@ local M = {}
 local config = require('llmancer.config')
 local main = require('llmancer.main')
 
+-- Add at the top of the file with other requires:
+local log = function(msg)
+  print(string.format("[LLMancer Debug] %s", msg))
+end
+
 -- Store chat history for each buffer
 ---@type table<number, ChatMessage[]>
 M.chat_history = {}
@@ -453,10 +458,9 @@ function M.view_conversation()
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 end
 
--- Change from local function to M.create_params_text
+-- Modify create_params_text to include debugging:
 function M.create_params_text()
   local chat_bufnr = vim.api.nvim_get_current_buf()
-  local target_bufnr = M.target_buffers[chat_bufnr]
 
   local params_table = {
     params = {
@@ -470,11 +474,14 @@ function M.create_params_text()
     }
   }
 
-  -- Add target file to context.files if it exists
-  if target_bufnr and vim.api.nvim_buf_is_valid(target_bufnr) then
-    local filename = vim.api.nvim_buf_get_name(target_bufnr)
-    if filename ~= "" then
-      params_table.context.files = { filename }
+  -- Only add current file if in "current" mode
+  if config.values.add_files_to_new_chat == "current" then
+    local target_bufnr = vim.fn.bufnr('#')
+    if target_bufnr ~= -1 and target_bufnr ~= chat_bufnr then
+      local filename = vim.api.nvim_buf_get_name(target_bufnr)
+      if filename ~= "" then
+        params_table.context.files = { filename }
+      end
     end
   end
 
@@ -490,45 +497,12 @@ function M.create_params_text()
   return result
 end
 
--- Update the build_system_prompt function to use the context correctly
+-- Update the build_system_prompt function to NOT include files
 function M.build_system_prompt()
   local chat_bufnr = vim.api.nvim_get_current_buf()
   local system_context = M.get_system_role()
 
-  -- Get the params table from the buffer
-  local params = get_buffer_config(chat_bufnr)
-  if not params or not params.context then return system_context end
-
-  -- Helper function to add file content to context
-  local function add_file_to_context(filepath)
-    if vim.fn.filereadable(filepath) == 1 then
-      local content = table.concat(vim.fn.readfile(filepath), '\n')
-      system_context = string.format([[%s
-
-File: %s
-Content:
-%s]], system_context, filepath, content)
-    end
-  end
-
-  -- Add context for each file
-  if params.context.files then
-    for _, file in ipairs(params.context.files) do
-      -- Handle special case for codebase() function
-      if type(file) == "function" then
-        local success, files = pcall(file)
-        if success and type(files) == "table" then
-          for _, f in ipairs(files) do
-            add_file_to_context(f)
-          end
-        end
-      else
-        -- Handle regular file paths
-        add_file_to_context(file)
-      end
-    end
-  end
-
+  -- No longer need to add files to system prompt
   return system_context
 end
 

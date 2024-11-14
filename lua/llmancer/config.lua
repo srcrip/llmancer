@@ -12,6 +12,7 @@ local M = {}
 ---@field close_chat_buffer_on_win_closed boolean Whether to close the chat buffer when its window is closed
 ---@field actions table Action configuration
 ---@field actions.keymap string Keymap for actions menu
+---@field add_files_to_new_chat "all"|"current"|"none" Which files to add to context when creating a new chat
 
 -- Default configuration
 ---@type Config
@@ -28,6 +29,7 @@ local defaults = {
   actions = {
     keymap = "<leader>a",
   },
+  add_files_to_new_chat = "all",
 }
 
 -- Current configuration (starts as defaults)
@@ -64,6 +66,13 @@ local function validate_config(config)
 
   if type(config.temperature) ~= "number" or config.temperature < 0 or config.temperature > 1 then
     return "temperature must be a number between 0 and 1"
+  end
+
+  -- Validate add_files_to_new_chat
+  if config.add_files_to_new_chat and 
+     not vim.tbl_contains({ 'all', 'current', 'none' }, config.add_files_to_new_chat) then
+    return string.format("Invalid add_files_to_new_chat: %s (must be 'all', 'current', or 'none')", 
+      config.add_files_to_new_chat)
   end
 
   return nil

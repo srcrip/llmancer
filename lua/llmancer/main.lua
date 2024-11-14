@@ -8,6 +8,9 @@ local M = {}
 -- At the top of the file, add:
 local utils = require('llmancer.utils')
 local config = require('llmancer.config')
+local log = function(msg)
+  print(string.format("[LLMancer Debug] %s", msg))
+end
 
 -- Helper functions
 -- Open buffer in appropriate split
@@ -139,17 +142,7 @@ function M.setup(opts)
     group = group,
     callback = function(ev)
       local bufnr = ev.buf
-
-      -- -- Ensure required modules are loaded
-      -- local ok1, chat = pcall(require, 'llmancer.chat')
-      -- local ok2, main = pcall(require, 'llmancer.main')
-
       local chat = require('llmancer.chat')
-
-      -- if not (ok1 and ok2) then
-      --   vim.notify("Failed to load required modules", vim.log.levels.ERROR)
-      --   return
-      -- end
 
       -- Set buffer options
       vim.bo[bufnr].bufhidden = 'hide'
@@ -184,15 +177,9 @@ function M.setup(opts)
         }
       end
 
-      -- Try to determine target buffer first
-      local target_bufnr = vim.fn.bufnr('#')
-      if target_bufnr ~= -1 and target_bufnr ~= bufnr then
-        chat.set_target_buffer(bufnr, target_bufnr)
-      end
-
       -- Initialize new buffers with params and help text
       if is_new_buffer then
-        -- Create params text after target buffer is set
+        -- Create params text first
         local params_text = chat.create_params_text()
 
         -- Then add help text
@@ -216,6 +203,14 @@ function M.setup(opts)
 
         -- Set the buffer content
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, params_text)
+
+        -- Only set target buffer after params are created, and only if we're in "current" mode
+        if config.values.add_files_to_new_chat == "current" then
+          local target_bufnr = vim.fn.bufnr('#')
+          if target_bufnr ~= -1 and target_bufnr ~= bufnr then
+            chat.set_target_buffer(bufnr, target_bufnr)
+          end
+        end
       end
     end,
   })
@@ -295,36 +290,117 @@ end
 ---@param chat_id string|nil The ID of an existing chat to open
 ---@return number bufnr The buffer number of the created chat buffer
 function M.open_chat(chat_id)
-  -- Store current buffer as target before creating chat buffer
-  local target_bufnr = vim.api.nvim_get_current_buf()
-  local target_name = vim.api.nvim_buf_get_name(target_bufnr)
-
-  -- Only use as target if it's a real file
-  if target_name == "" then
-    target_bufnr = nil
+  -- Store list of open files BEFORE creating new buffer
+  local open_files = {}
+  if config.values.add_files_to_new_chat == "all" then
+    log("Collecting all open files...")
+    log(string.format("Current mode: %s", config.values.add_files_to_new_chat))
+    
+    -- Debug all buffers
+    local all_bufs = vim.api.nvim_list_bufs()
+    log(string.format("Total buffers: %d", #all_bufs))
+    for _, buf in ipairs(all_bufs) do
+      local filename = vim.api.nvim_buf_get_name(buf)
+      local is_loaded = vim.api.nvim_buf_is_loaded(buf)
+      local is_valid = vim.api.nvim_buf_is_valid(buf)
+      local is_listed = vim.fn.buflisted(buf) == 1
+      log(string.format("Buffer %d: filename='%s', loaded=%s, valid=%s, listed=%s", 
+        buf, filename, tostring(is_loaded), tostring(is_valid), tostring(is_listed)))
+      
+      -- Changed condition to check if buffer is listed instead of loaded
+      if filename ~= "" and vim.fn.buflisted(buf) == 1 then
+        log(string.format("Adding to open_files: %s", filename))
+        table.insert(open_files, filename)
+      else
+        log(string.format("Skipping buffer %d: empty name or not listed", buf))
+      end
+    end
+    log(string.format("Collected %d open files", #open_files))
   end
 
   -- Generate chat ID if not provided
   chat_id = chat_id or generate_chat_id()
+  log(string.format("Using chat ID: %s", chat_id))
 
   -- Create buffer with the file path directly
   local bufnr = get_or_create_chat_buffer(chat_id)
+  log(string.format("Created/got chat buffer: %d", bufnr))
 
   -- If this is an existing chat, load its content
   if vim.fn.filereadable(vim.api.nvim_buf_get_name(bufnr)) == 1 then
+    log("Loading existing chat content")
     require('llmancer.chat').load_chat(chat_id)
   else
-    -- For new chats, set target buffer only (FileType autocmd will handle the rest)
-    if target_bufnr then
-      local chat = require('llmancer.chat')
-      chat.set_target_buffer(bufnr, target_bufnr)
+    log("Creating new chat content")
+    -- For new chats, create initial content
+    local chat = require('llmancer.chat')
+    
+    -- Initialize chat history
+    if not chat.chat_history[bufnr] then
+      local id = chat.generate_id()
+      chat.chat_history[bufnr] = {
+        {
+          content = chat.build_system_prompt(),
+          id = id,
+          opts = { visible = false },
+          role = "system"
+        }
+      }
+      log("Initialized chat history")
     end
+
+    -- Create params text with collected files
+    local params_table = {
+      params = {
+        model = config.values.model,
+        max_tokens = config.values.max_tokens,
+        temperature = config.values.temperature,
+      },
+      context = {
+        files = open_files,
+        global = {}
+      }
+    }
+    log(string.format("Created params table with %d files", #params_table.context.files))
+
+    -- Convert params to text
+    local params_str = vim.inspect(params_table)
+    local params_lines = vim.split(params_str, '\n')
+    local params_text = { "---" }
+    vim.list_extend(params_text, params_lines)
+    table.insert(params_text, "---")
+    log(string.format("Converted params to %d lines", #params_lines))
+
+    -- Add help text
+    local help_text = {
+      "",
+      "Welcome to LLMancer.nvim! 🤖",
+      "",
+      "Shortcuts:",
+      "- <Enter> in normal mode: Send message",
+      "- gd: View conversation history",
+      "- gs: View system prompt",
+      "- ga: Create application plan from last response",
+      "",
+      "Type your message below:",
+      "----------------------------------------",
+      "",
+    }
+
+    -- Combine params and help text
+    vim.list_extend(params_text, help_text)
+    log(string.format("Final text has %d lines", #params_text))
+
+    -- Set the buffer content
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, params_text)
+    log("Set buffer content")
   end
 
   -- Move cursor to end of buffer
   vim.schedule(function()
     local line_count = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_win_set_cursor(0, { line_count, 0 })
+    log("Moved cursor to end")
   end)
 
   return bufnr
