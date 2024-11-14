@@ -14,7 +14,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-    'jpmcb/LLMancer.nvim',
+    'srcrip/llmancer',
     dependencies = {
         "nvim-lua/plenary.nvim",
         -- required for listing past chats (telescope coming soon)
