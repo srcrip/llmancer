@@ -180,6 +180,23 @@ local function handle_stream_chunk(chunk, bufnr, message_number, accumulated_tex
     else
       append_to_buffer_streaming(bufnr, new_text)
     end
+
+    -- If this is the last chunk (stop token received), store in chat history
+    if content_delta.delta.stop_reason then
+      -- Initialize history for this buffer if needed
+      if not M.chat_history[bufnr] then
+        M.chat_history[bufnr] = {}
+      end
+
+      -- Add the LLM response to chat history
+      table.insert(M.chat_history[bufnr], {
+        content = accumulated_text,
+        id = M.generate_id(),
+        opts = { visible = true },
+        role = "llm",
+        message_number = message_number
+      })
+    end
   end)
 
   return accumulated_text
@@ -409,6 +426,9 @@ end
 
 -- Function to view conversation
 function M.view_conversation()
+  -- Get the source chat buffer number BEFORE creating the history window
+  local source_bufnr = vim.api.nvim_get_current_buf()
+  
   local bufnr = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_buf_set_name(bufnr, 'LLMancer-History')
 
@@ -419,10 +439,8 @@ function M.view_conversation()
 
   -- Setup buffer options and mappings
   setup_floating_buffer(bufnr, 'llmancer')
-
-  -- Get current chat history
-  local current_bufnr = vim.fn.bufnr(config.values.buffer_name)
-  local history = M.chat_history[current_bufnr] or {}
+  
+  local history = M.chat_history[source_bufnr] or {}
 
   -- Convert history to string
   local content = vim.fn.json_encode(history)
@@ -577,54 +595,27 @@ function M.send_message()
     return
   end
 
-  -- If no message number found, this is the first message
-  if not message_number then
-    message_number = 1
-  end
-
-  -- Get params and build context from files
-  local params = get_buffer_config(bufnr)
-  local context_content = {}
-
-  if params and params.context and params.context.files then
-    for _, file in ipairs(params.context.files) do
-      if vim.fn.filereadable(file) == 1 then
-        local file_content = table.concat(vim.fn.readfile(file), '\n')
-        table.insert(context_content, string.format("File: %s\n\n%s", file, file_content))
-      end
-    end
-  end
-
-  -- Combine context and user message
-  local full_content
-  if #context_content > 0 then
-    full_content = "---\n" .. table.concat(context_content, "\n\n") .. "\n---\n\n" .. content
-  else
-    full_content = content
-  end
-
   -- Add user message to history
   table.insert(M.chat_history[bufnr], {
-    content = full_content,
+    content = content,
     id = M.generate_id(),
     opts = { visible = true },
     role = "user",
     message_number = message_number
   })
-
+  
   -- Prepare message format for API
   ---@type Message[]
   local message = {
     {
       role = "user",
-      content = full_content
+      content = content
     }
   }
 
   -- Add blank lines before sending request to position the thinking indicator
   vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", "" })
 
-  -- todo: add a config option to disable this
   -- Auto-scroll to bottom
   vim.schedule(function()
     vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(bufnr), 0 })
@@ -645,27 +636,6 @@ function M.send_message()
       end)
     end)
   end
-end
-
--- Update the create_help_text function to use M.create_params_text
-local function create_help_text(chat_bufnr)
-  -- Combine params and help text
-  local text = M.create_params_text()
-  vim.list_extend(text, {
-    "",
-    "Welcome to LLMancer.nvim! 🤖",
-    "",
-    "Shortcuts:",
-    "- <Enter> in normal mode: Send message",
-    "- gd: View conversation history",
-    "- gs: View system prompt",
-    "- ga: Create application plan from last response",
-    "",
-    "Type your message below:",
-    "----------------------------------------",
-    "",
-  })
-  return text
 end
 
 -- Function to show system prompt in new buffer
@@ -850,8 +820,5 @@ end
 -- Export the functions
 M.show_system_prompt = show_system_prompt
 M.setup_buffer_mappings = setup_buffer_mappings
-
--- Export the function for use in main.lua
-M.create_help_text = create_help_text
 
 return M
