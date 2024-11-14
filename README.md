@@ -44,3 +44,12 @@ Start a chat session:
 require('llmancer').open_chat()
 ```
 
+## 🗺️ Roadmap
+
+- [ ] More advanced prompts
+- [ ] Advanced context management features (chat with codebase)
+- [ ] Integrate Claude prompt caching
+
+## ❤️  Contributing
+
+Contributions are welcome!
