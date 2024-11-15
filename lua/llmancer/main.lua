@@ -8,9 +8,6 @@ local M = {}
 -- At the top of the file, add:
 local utils = require('llmancer.utils')
 local config = require('llmancer.config')
-local log = function(msg)
-  print(string.format("[LLMancer Debug] %s", msg))
-end
 
 -- Helper functions
 -- Open buffer in appropriate split
@@ -293,45 +290,27 @@ function M.open_chat(chat_id)
   -- Store list of open files BEFORE creating new buffer
   local open_files = {}
   if config.values.add_files_to_new_chat == "all" then
-    log("Collecting all open files...")
-    log(string.format("Current mode: %s", config.values.add_files_to_new_chat))
-    
-    -- Debug all buffers
+    -- Collect all open files
     local all_bufs = vim.api.nvim_list_bufs()
-    log(string.format("Total buffers: %d", #all_bufs))
     for _, buf in ipairs(all_bufs) do
       local filename = vim.api.nvim_buf_get_name(buf)
-      local is_loaded = vim.api.nvim_buf_is_loaded(buf)
-      local is_valid = vim.api.nvim_buf_is_valid(buf)
-      local is_listed = vim.fn.buflisted(buf) == 1
-      log(string.format("Buffer %d: filename='%s', loaded=%s, valid=%s, listed=%s", 
-        buf, filename, tostring(is_loaded), tostring(is_valid), tostring(is_listed)))
-      
       -- Changed condition to check if buffer is listed instead of loaded
       if filename ~= "" and vim.fn.buflisted(buf) == 1 then
-        log(string.format("Adding to open_files: %s", filename))
         table.insert(open_files, filename)
-      else
-        log(string.format("Skipping buffer %d: empty name or not listed", buf))
       end
     end
-    log(string.format("Collected %d open files", #open_files))
   end
 
   -- Generate chat ID if not provided
   chat_id = chat_id or generate_chat_id()
-  log(string.format("Using chat ID: %s", chat_id))
 
   -- Create buffer with the file path directly
   local bufnr = get_or_create_chat_buffer(chat_id)
-  log(string.format("Created/got chat buffer: %d", bufnr))
 
   -- If this is an existing chat, load its content
   if vim.fn.filereadable(vim.api.nvim_buf_get_name(bufnr)) == 1 then
-    log("Loading existing chat content")
     require('llmancer.chat').load_chat(chat_id)
   else
-    log("Creating new chat content")
     -- For new chats, create initial content
     local chat = require('llmancer.chat')
     
@@ -346,7 +325,6 @@ function M.open_chat(chat_id)
           role = "system"
         }
       }
-      log("Initialized chat history")
     end
 
     -- Create params text with collected files
@@ -361,7 +339,6 @@ function M.open_chat(chat_id)
         global = {}
       }
     }
-    log(string.format("Created params table with %d files", #params_table.context.files))
 
     -- Convert params to text
     local params_str = vim.inspect(params_table)
@@ -369,7 +346,6 @@ function M.open_chat(chat_id)
     local params_text = { "---" }
     vim.list_extend(params_text, params_lines)
     table.insert(params_text, "---")
-    log(string.format("Converted params to %d lines", #params_lines))
 
     -- Add help text
     local help_text = {
@@ -389,18 +365,15 @@ function M.open_chat(chat_id)
 
     -- Combine params and help text
     vim.list_extend(params_text, help_text)
-    log(string.format("Final text has %d lines", #params_text))
 
     -- Set the buffer content
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, params_text)
-    log("Set buffer content")
   end
 
   -- Move cursor to end of buffer
   vim.schedule(function()
     local line_count = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_win_set_cursor(0, { line_count, 0 })
-    log("Moved cursor to end")
   end)
 
   return bufnr

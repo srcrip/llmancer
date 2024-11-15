@@ -2,7 +2,7 @@
 ---@field content string The content of the message
 ---@field id number A unique identifier
 ---@field opts table Message options
----@field role "user"|"llm"|"system" The role of the message sender
+---@field role "user"|"assistant"|"system" The role of the message sender
 ---@field message_number number|nil Message number for user messages
 
 ---@class ChatModule
@@ -16,11 +16,6 @@ local M = {}
 
 local config = require('llmancer.config')
 local main = require('llmancer.main')
-
--- Add at the top of the file with other requires:
-local log = function(msg)
-  print(string.format("[LLMancer Debug] %s", msg))
-end
 
 -- Store chat history for each buffer
 ---@type table<number, ChatMessage[]>
@@ -171,15 +166,11 @@ local function handle_stream_chunk(chunk, bufnr, message_number, accumulated_tex
     -- If this is the first chunk, add the model prefix and a newline
     if #accumulated_text == #new_text then
       vim.api.nvim_buf_set_lines(bufnr, -2, -1, false, { "" })
-      -- Format the prefix for the LLM response:
-      -- For code blocks: "model_name:\n\n```..."
-      -- For normal text: "model_name: text..."
-      -- This ensures code blocks render properly with spacing
       local prefix = config.values.model .. ":"
       if new_text:sub(1, 3) == "```" then
-        prefix = prefix .. "\n\n" -- Add two newlines before code blocks
+        prefix = prefix .. "\n\n"
       else
-        prefix = prefix .. " "    -- Add single space for normal text
+        prefix = prefix .. " "
       end
       append_to_buffer_streaming(bufnr, prefix .. new_text)
     else
@@ -193,12 +184,12 @@ local function handle_stream_chunk(chunk, bufnr, message_number, accumulated_tex
         M.chat_history[bufnr] = {}
       end
 
-      -- Add the LLM response to chat history
+      -- Add the assistant response to chat history
       table.insert(M.chat_history[bufnr], {
         content = accumulated_text,
         id = M.generate_id(),
         opts = { visible = true },
-        role = "llm",
+        role = "assistant",
         message_number = message_number
       })
     end
@@ -230,7 +221,26 @@ function M.save_chat(bufnr)
   end
 end
 
--- Update the send_to_anthropic function to include debugging
+-- Simplify the prepare_messages_for_api function to just format messages without limits
+---@param history ChatMessage[] The full chat history
+---@return table[] messages Formatted messages for API
+local function prepare_messages_for_api(history)
+  local messages = {}
+  
+  -- Convert messages to API format
+  for _, msg in ipairs(history) do
+    if msg.role ~= "system" then
+      table.insert(messages, {
+        role = msg.role,
+        content = msg.content
+      })
+    end
+  end
+  
+  return messages
+end
+
+-- Update send_to_anthropic to use the simplified prepare_messages_for_api
 function M.send_to_anthropic(message)
   local Job = require('plenary.job')
   local bufnr = vim.api.nvim_get_current_buf()
@@ -239,6 +249,13 @@ function M.send_to_anthropic(message)
 
   -- Build system prompt
   local system = M.build_system_prompt()
+
+  -- Get conversation history and prepare messages
+  local history = M.chat_history[bufnr] or {}
+  local messages = prepare_messages_for_api(history)
+  
+  -- Add current message to messages array
+  vim.list_extend(messages, message)
 
   -- Track the accumulated response
   local accumulated_text = ""
@@ -249,7 +266,7 @@ function M.send_to_anthropic(message)
     model = params.model,
     max_tokens = params.max_tokens,
     temperature = params.temperature,
-    messages = message,
+    messages = messages, -- Send full conversation history
     system = system,
     stream = true,
   })
@@ -443,7 +460,7 @@ function M.view_conversation()
   vim.api.nvim_open_win(bufnr, true, win_opts)
 
   -- Setup buffer options and mappings
-  setup_floating_buffer(bufnr, 'llmancer')
+  setup_floating_buffer(bufnr, 'json')
 
   local history = M.chat_history[source_bufnr] or {}
 
