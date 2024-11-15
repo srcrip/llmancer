@@ -53,18 +53,17 @@ end
 local function setup_treesitter()
   local ok, ts_configs = pcall(require, "nvim-treesitter.configs")
   if not ok then
-    vim.notify("LLMancer: nvim-treesitter is recommended for syntax highlighting", vim.log.levels.WARN)
+    vim.notify(
+      "LLMancer: nvim-treesitter is recommended for syntax highlighting. Please install at least 'markdown', 'markdown_inline', 'lua', and any other grammars you want syntax highlighting for in the chat buffer.",
+      vim.log.levels.WARN)
     return
   end
 
-  local parsers = {
-    "markdown", "markdown_inline",
-    "lua", "python", "javascript",
-    "typescript", "rust", "go",
-  }
+  -- todo: perhaps add a config to auto install these?
+  -- local parsers = { "markdown", "markdown_inline", "lua" }
 
   ts_configs.setup({
-    ensure_installed = parsers,
+    -- ensure_installed = parsers,
     highlight = {
       enable = true,
       additional_vim_regex_highlighting = { "markdown", "llmancer" },
@@ -72,12 +71,12 @@ local function setup_treesitter()
   })
 
   -- Install missing parsers
-  local ts_parsers = require("nvim-treesitter.parsers")
-  for _, lang in ipairs(parsers) do
-    if not ts_parsers.has_parser(lang) then
-      vim.cmd("TSInstall " .. lang)
-    end
-  end
+  -- local ts_parsers = require("nvim-treesitter.parsers")
+  -- for _, lang in ipairs(parsers) do
+  --   if not ts_parsers.has_parser(lang) then
+  --     vim.cmd("TSInstall " .. lang)
+  --   end
+  -- end
 end
 
 -- Setup buffer-local keymapping for actions
@@ -101,7 +100,7 @@ local function setup_buffer_actions()
               end
             end)
           end,
-          once = true  -- Only trigger once
+          once = true -- Only trigger once
         })
       end
     end
@@ -313,7 +312,7 @@ function M.open_chat(chat_id)
   else
     -- For new chats, create initial content
     local chat = require('llmancer.chat')
-    
+
     -- Initialize chat history
     if not chat.chat_history[bufnr] then
       local id = chat.generate_id()
