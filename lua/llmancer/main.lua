@@ -62,6 +62,8 @@ local function setup_treesitter()
   -- todo: perhaps add a config to auto install these?
   -- local parsers = { "markdown", "markdown_inline", "lua" }
 
+  -- todo: also maybe we can detect that those grammars are missing and prompt the user to install them?
+
   ts_configs.setup({
     -- ensure_installed = parsers,
     highlight = {
@@ -84,10 +86,14 @@ local function setup_buffer_actions()
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "llmancer",
     callback = function(ev)
-      -- Set up the actions keymap
-      vim.keymap.set("n", config.values.actions.keymap,
-        function() require('llmancer.actions').show_actions() end,
-        { buffer = ev.buf, desc = "Show LLMancer actions" })
+      -- Set up the actions keymap if actions module exists
+      local ok, actions = pcall(require, 'llmancer.actions')
+      if ok then
+        local keymap = config.values.actions and config.values.actions.keymap or "<leader>a"
+        vim.keymap.set("n", keymap,
+          function() actions.show_actions() end,
+          { buffer = ev.buf, desc = "Show LLMancer actions" })
+      end
 
       -- Only set up the WinClosed autocmd if the config option is enabled
       if config.values.close_chat_buffer_on_win_closed then

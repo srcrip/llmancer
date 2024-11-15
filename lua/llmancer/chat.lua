@@ -12,6 +12,7 @@
 ---@field send_to_anthropic fun(message: Message[]) Function to send message to Anthropic
 ---@field target_buffers table<number, number> Map of chat bufnr to target bufnr
 ---@field build_system_prompt fun():string Function to build system prompt with current context
+---@type table<number, plenary.Job> Map of buffer numbers to active jobs
 local M = {}
 
 local config = require('llmancer.config')
@@ -24,6 +25,10 @@ M.chat_history = {}
 -- Store target buffers for each chat buffer
 ---@type table<number, number> Map of chat bufnr to target bufnr
 M.target_buffers = {}
+
+-- Add at the top with other module variables:
+---@type table<number, plenary.Job> Map of buffer numbers to active jobs
+M.active_jobs = {}
 
 -- Function to generate a random ID
 ---@return number
@@ -125,6 +130,11 @@ end
 ---@param bufnr number The buffer number
 ---@param new_text string The text to append
 local function append_to_buffer_streaming(bufnr, new_text)
+  -- Check if buffer is still valid
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+
   local last_line_idx = vim.api.nvim_buf_line_count(bufnr) - 1
   local last_line = vim.api.nvim_buf_get_lines(bufnr, last_line_idx, last_line_idx + 1, false)[1]
 
@@ -140,6 +150,8 @@ local function append_to_buffer_streaming(bufnr, new_text)
     vim.api.nvim_buf_set_lines(bufnr, last_line_idx + 1, last_line_idx + 1, false,
       vim.list_slice(lines, 2))
   end
+
+  return true
 end
 
 -- Handle a single chunk of streamed response
@@ -163,6 +175,16 @@ local function handle_stream_chunk(chunk, bufnr, message_number, accumulated_tex
   accumulated_text = accumulated_text .. new_text
 
   vim.schedule(function()
+    -- Check if buffer is still valid
+    if not vim.api.nvim_buf_is_valid(bufnr) then
+      -- Cancel the job if buffer is invalid
+      if M.active_jobs[bufnr] then
+        M.active_jobs[bufnr]:shutdown()
+        M.active_jobs[bufnr] = nil
+      end
+      return
+    end
+
     -- If this is the first chunk, add the model prefix and a newline
     if #accumulated_text == #new_text then
       vim.api.nvim_buf_set_lines(bufnr, -2, -1, false, { "" })
@@ -172,9 +194,13 @@ local function handle_stream_chunk(chunk, bufnr, message_number, accumulated_tex
       else
         prefix = prefix .. " "
       end
-      append_to_buffer_streaming(bufnr, prefix .. new_text)
+      if not append_to_buffer_streaming(bufnr, prefix .. new_text) then
+        return
+      end
     else
-      append_to_buffer_streaming(bufnr, new_text)
+      if not append_to_buffer_streaming(bufnr, new_text) then
+        return
+      end
     end
 
     -- If this is the last chunk (stop token received), store in chat history
@@ -240,12 +266,27 @@ local function prepare_messages_for_api(history)
   return messages
 end
 
--- Update send_to_anthropic to use the simplified prepare_messages_for_api
+-- Update send_to_anthropic to handle auth errors
 function M.send_to_anthropic(message)
+  -- Check for API key before proceeding
+  if not config.values.anthropic_api_key or config.values.anthropic_api_key == "" then
+    vim.notify(
+      "Anthropic API key not set. Please set ANTHROPIC_API_KEY environment variable or configure it in your setup.",
+      vim.log.levels.ERROR
+    )
+    return nil
+  end
+
   local Job = require('plenary.job')
   local bufnr = vim.api.nvim_get_current_buf()
   local config_table = get_buffer_config(bufnr)
   local params = config_table.params
+
+  -- Cancel any existing job for this buffer
+  if M.active_jobs[bufnr] then
+    M.active_jobs[bufnr]:shutdown()
+    M.active_jobs[bufnr] = nil
+  end
 
   -- Build system prompt
   local system = M.build_system_prompt()
@@ -260,13 +301,14 @@ function M.send_to_anthropic(message)
   -- Track the accumulated response
   local accumulated_text = ""
   local message_number = message[1] and message[1].message_number
+  local had_error = false
 
   -- Prepare request body
   local body = vim.fn.json_encode({
     model = params.model,
     max_tokens = params.max_tokens,
     temperature = params.temperature,
-    messages = messages, -- Send full conversation history
+    messages = messages,
     system = system,
     stream = true,
   })
@@ -282,14 +324,50 @@ function M.send_to_anthropic(message)
       '-H', 'accept: text/event-stream',
       '-d', body,
       '--no-buffer',
+      '-i', -- Include response headers
     },
     on_stdout = vim.schedule_wrap(function(_, chunk)
       if chunk then
-        accumulated_text = handle_stream_chunk(chunk, bufnr, message_number, accumulated_text)
+        -- Check for HTTP status line
+        local status = chunk:match("^HTTP/[%d.]+ (%d+)")
+        if status then
+          if status == "401" then
+            had_error = true
+            vim.notify(
+              "Authentication failed. Please check your Anthropic API key.",
+              vim.log.levels.ERROR
+            )
+            if M.active_jobs[bufnr] then
+              M.active_jobs[bufnr]:shutdown()
+              M.active_jobs[bufnr] = nil
+            end
+            return
+          elseif status ~= "200" then
+            had_error = true
+            vim.notify(
+              "API request failed with status " .. status,
+              vim.log.levels.ERROR
+            )
+            if M.active_jobs[bufnr] then
+              M.active_jobs[bufnr]:shutdown()
+              M.active_jobs[bufnr] = nil
+            end
+            return
+          end
+        end
+        -- Only process data if we haven't had an error
+        if not had_error then
+          accumulated_text = handle_stream_chunk(chunk, bufnr, message_number, accumulated_text)
+        end
       end
     end),
     on_exit = vim.schedule_wrap(function(j, return_val)
-      if return_val == 0 then
+      -- Remove job from active jobs
+      if M.active_jobs[bufnr] == j then
+        M.active_jobs[bufnr] = nil
+      end
+
+      if return_val == 0 and not had_error and vim.api.nvim_buf_is_valid(bufnr) then
         -- Add two blank lines and next user prompt after completion
         local next_prompt = string.format("user (%d): ", (message_number or 0) + 1)
         vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", "", next_prompt })
@@ -304,6 +382,8 @@ function M.send_to_anthropic(message)
     end),
   })
 
+  -- Store the job
+  M.active_jobs[bufnr] = job
   job:start()
   return job
 end
@@ -550,7 +630,7 @@ function M.get_system_role()
   return system_content
 end
 
--- Update send_message to include file contents in user message
+-- Update send_message to handle the case where send_to_anthropic returns nil
 function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
   local win = vim.api.nvim_get_current_win()
@@ -639,14 +719,21 @@ function M.send_message()
   -- Send to Anthropic asynchronously
   local job = M.send_to_anthropic(message)
 
-  -- Ensure cleanup happens even if job fails
-  if job then
-    job:after(function()
-      vim.schedule(function()
-        stop_thinking()
-      end)
-    end)
+  -- If job is nil (API key not set), clean up thinking indicator
+  if not job then
+    stop_thinking()
+    -- Remove the blank lines we added
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    vim.api.nvim_buf_set_lines(bufnr, line_count - 2, line_count, false, {})
+    return
   end
+
+  -- Ensure cleanup happens even if job fails
+  job:after(function()
+    vim.schedule(function()
+      stop_thinking()
+    end)
+  end)
 end
 
 -- Function to show system prompt in new buffer
@@ -689,6 +776,15 @@ local function setup_buffer_mappings(bufnr)
   vim.api.nvim_buf_set_keymap(bufnr, 'n', 'ga',
     [[<cmd>lua require('llmancer.chat').create_plan_from_last_response()<CR>]],
     { noremap = true, silent = true, desc = "Create plan from last response" })
+
+  -- Update cleanup autocmds to use M.cleanup_buffer
+  vim.api.nvim_create_autocmd({"BufDelete", "BufWipeout"}, {
+    buffer = bufnr,
+    callback = function()
+      require('llmancer.chat').cleanup_buffer(bufnr)
+    end,
+    once = true,
+  })
 
   -- Add the range command
   vim.api.nvim_buf_create_user_command(bufnr, 'LLMancerPlan', function(opts)
@@ -831,5 +927,20 @@ end
 -- Export the functions
 M.show_system_prompt = show_system_prompt
 M.setup_buffer_mappings = setup_buffer_mappings
+
+-- Add cleanup_buffer to the module instead of keeping it local
+function M.cleanup_buffer(bufnr)
+  -- Cancel any active job
+  if M.active_jobs[bufnr] then
+    M.active_jobs[bufnr]:shutdown()
+    M.active_jobs[bufnr] = nil
+  end
+  
+  -- Clean up chat history
+  M.chat_history[bufnr] = nil
+  
+  -- Clean up target buffers
+  M.target_buffers[bufnr] = nil
+end
 
 return M
