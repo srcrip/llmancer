@@ -32,8 +32,9 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
         })
     end,
     keys = {
-        { "<leader>ll", "<cmd>lua require('llmancer').open_chat()<cr>",  desc = "Open LLMancer Chat" },
-        { "<leader>lc", "<cmd>lua require('llmancer').list_chats()<cr>", desc = "List LLMancer Chats" },
+        { "<leader>ll", "<cmd>lua require('llmancer').open_chat()<cr>",              desc = "AI: open chat" },
+        { "<leader>le", "<cmd>lua require('llmancer.inline_edit').start_edit()<cr>", desc = "AI: edit selection", mode = "v" },
+        { "<leader>lc", "<cmd>lua require('llmancer').list_chats()<cr>",             desc = "AI: list chats" },
     },
 },
 ```
