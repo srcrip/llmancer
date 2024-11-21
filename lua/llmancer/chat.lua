@@ -17,6 +17,7 @@ local M = {}
 
 local config = require('llmancer.config')
 local main = require('llmancer.main')
+local indicators = require('llmancer.indicators')
 
 -- Store chat history for each buffer
 ---@type table<number, ChatMessage[]>
@@ -150,6 +151,18 @@ local function append_to_buffer_streaming(bufnr, new_text)
     vim.api.nvim_buf_set_lines(bufnr, last_line_idx + 1, last_line_idx + 1, false,
       vim.list_slice(lines, 2))
   end
+
+  -- Auto-scroll to the last line and center cursor
+  -- todo: doesn't work
+  -- vim.schedule(function()
+  --   -- Only scroll if we're in the chat buffer
+  --   if vim.api.nvim_get_current_buf() == bufnr then
+  --     local win = vim.api.nvim_get_current_win()
+  --     local new_last_line = vim.api.nvim_buf_line_count(bufnr)
+  --     vim.api.nvim_win_set_cursor(win, { new_last_line, 0 })
+  --     vim.cmd('normal! zz')
+  --   end
+  -- end)
 
   return true
 end
@@ -608,9 +621,14 @@ end
 ---@param target_bufnr number|nil The target buffer number (defaults to alternate buffer)
 function M.set_target_buffer(chat_bufnr, target_bufnr)
   target_bufnr = target_bufnr or vim.fn.bufnr('#')
+  
+  vim.notify(string.format("Setting target buffer - Chat: %d, Target: %d", chat_bufnr, target_bufnr), vim.log.levels.DEBUG)
 
   if target_bufnr ~= -1 and vim.api.nvim_buf_is_valid(target_bufnr) then
     M.target_buffers[chat_bufnr] = target_bufnr
+    vim.notify(string.format("Target buffer set successfully - Chat: %d, Target: %d", chat_bufnr, target_bufnr), vim.log.levels.DEBUG)
+  else
+    vim.notify(string.format("Failed to set target buffer - Chat: %d, Target: %d (invalid)", chat_bufnr, target_bufnr), vim.log.levels.WARN)
   end
 end
 
@@ -630,10 +648,32 @@ function M.get_system_role()
   return system_content
 end
 
--- Update send_message to handle the case where send_to_anthropic returns nil
+-- Add this function to help with debugging target buffer setup
+function M.debug_target_buffer_state()
+  local bufnr = vim.api.nvim_get_current_buf()
+  vim.notify(string.format("Debug target buffer state for chat buffer %d:", bufnr), vim.log.levels.DEBUG)
+  vim.notify(string.format("Current alternate buffer: %d", vim.fn.bufnr('#')), vim.log.levels.DEBUG)
+  vim.notify(string.format("Is current buffer valid: %s", tostring(vim.api.nvim_buf_is_valid(bufnr))), vim.log.levels.DEBUG)
+  
+  local target_bufnr = M.target_buffers[bufnr]
+  if target_bufnr then
+    vim.notify(string.format("Target buffer: %d", target_bufnr), vim.log.levels.DEBUG)
+    vim.notify(string.format("Is target buffer valid: %s", tostring(vim.api.nvim_buf_is_valid(target_bufnr))), vim.log.levels.DEBUG)
+  else
+    vim.notify("No target buffer set", vim.log.levels.DEBUG)
+  end
+end
+
+-- Update send_message to set target buffer if not already set
 function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
   local win = vim.api.nvim_get_current_win()
+
+  -- Set target buffer if not already set
+  if not M.target_buffers[bufnr] then
+    M.set_target_buffer(bufnr)
+    M.debug_target_buffer_state() -- Add debugging info
+  end
 
   -- Initialize history for this buffer if it doesn't exist
   if not M.chat_history[bufnr] then
@@ -714,7 +754,7 @@ function M.send_message()
   end)
 
   -- Start thinking animation
-  local stop_thinking = main.create_thinking_indicator(bufnr)
+  local stop_thinking = indicators.create_thinking_indicator(bufnr)
 
   -- Send to Anthropic asynchronously
   local job = M.send_to_anthropic(message)
@@ -871,7 +911,16 @@ function M.create_plan_from_last_response()
   end
 
   local bufnr = vim.api.nvim_get_current_buf()
+  vim.notify(string.format("Current buffer (chat): %d", bufnr), vim.log.levels.DEBUG)
+  
+  -- Debug target buffers table
+  vim.notify("Target buffers table:", vim.log.levels.DEBUG)
+  for chat_buf, target_buf in pairs(M.target_buffers) do
+    vim.notify(string.format("Chat buf: %d -> Target buf: %d", chat_buf, target_buf), vim.log.levels.DEBUG)
+  end
+
   local target_bufnr = M.target_buffers[bufnr]
+  vim.notify(string.format("Found target buffer: %s", tostring(target_bufnr)), vim.log.levels.DEBUG)
 
   if not target_bufnr then
     vim.notify("No target buffer associated with this chat", vim.log.levels.ERROR)
@@ -930,17 +979,26 @@ M.setup_buffer_mappings = setup_buffer_mappings
 
 -- Add cleanup_buffer to the module instead of keeping it local
 function M.cleanup_buffer(bufnr)
+  vim.notify(string.format("Cleaning up buffer %d", bufnr), vim.log.levels.DEBUG)
+  
   -- Cancel any active job
   if M.active_jobs[bufnr] then
+    vim.notify(string.format("Cancelling active job for buffer %d", bufnr), vim.log.levels.DEBUG)
     M.active_jobs[bufnr]:shutdown()
     M.active_jobs[bufnr] = nil
   end
   
   -- Clean up chat history
-  M.chat_history[bufnr] = nil
+  if M.chat_history[bufnr] then
+    vim.notify(string.format("Cleaning chat history for buffer %d", bufnr), vim.log.levels.DEBUG)
+    M.chat_history[bufnr] = nil
+  end
   
   -- Clean up target buffers
-  M.target_buffers[bufnr] = nil
+  if M.target_buffers[bufnr] then
+    vim.notify(string.format("Cleaning target buffer association for buffer %d", bufnr), vim.log.levels.DEBUG)
+    M.target_buffers[bufnr] = nil
+  end
 end
 
 return M

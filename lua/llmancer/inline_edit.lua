@@ -1,4 +1,5 @@
 local api = require('llmancer.api')
+local indicators = require('llmancer.indicators')
 
 local M = {}
 
@@ -136,9 +137,8 @@ local function handle_edit_submit(bufnr, win_id, target_bufnr, start_line, end_l
 
   vim.api.nvim_win_close(win_id, true)
 
-  -- Show thinking indicator while waiting for response
-  local main = require('llmancer.main')
-  local stop_thinking = main.create_thinking_indicator(target_bufnr)
+  -- Show thinking indicator with highlighting
+  local stop_thinking = indicators.create_inline_edit_indicator(target_bufnr, start_line - 1, end_line - 1)
 
   local msg = [[
 I have this code:
@@ -153,6 +153,7 @@ Rules:
 1. You MUST preserve the EXACT indentation level of each line from the original code
 2. Do not modify the indentation or spacing at the start of any line
 3. Do not omit any parts of the code, even if they are unchanged
+4. Make sure you DO NOT return the answer wrapped in <code></code> tags. Return JUST the code.
 
 Here are the user's instructions:
 
@@ -172,7 +173,7 @@ Here are the user's instructions:
   api.send_message({
     { role = "user", content = message }
   }, nil, function(success, response, error)
-    stop_thinking()
+    stop_thinking() -- This will now clear both the indicator and highlights
 
     if not success then
       vim.schedule(function()
