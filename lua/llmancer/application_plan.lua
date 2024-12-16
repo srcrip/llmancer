@@ -1,5 +1,7 @@
 local M = {}
 
+local indicators = require('llmancer.indicators')
+
 -- Constants for the plan buffer
 local HELP_TEXT = [[Apply Changes:
 <enter> to apply change (without saving)
@@ -413,7 +415,7 @@ function M.create_plan(code_blocks, target_buffers)
 
     -- Start thinking indicator
     local main = require('llmancer.main')
-    local stop_thinking = main.create_thinking_indicator(bufnr)
+    local stop_thinking = indicators.create_thinking_indicator(bufnr)
 
     -- Prepare buffer context
     local buffer_context = {}

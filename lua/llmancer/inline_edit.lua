@@ -143,9 +143,9 @@ local function handle_edit_submit(bufnr, win_id, target_bufnr, start_line, end_l
   local msg = [[
 I have this code:
 
-<code>
+```javascript
 %s
-</code>
+```
 
 Please provide ONLY a code block with the updated code. The code block should contain the complete replacement for the selected code.
 
@@ -153,7 +153,6 @@ Rules:
 1. You MUST preserve the EXACT indentation level of each line from the original code
 2. Do not modify the indentation or spacing at the start of any line
 3. Do not omit any parts of the code, even if they are unchanged
-4. Make sure you DO NOT return the answer wrapped in <code></code> tags. Return JUST the code.
 
 Here are the user's instructions:
 

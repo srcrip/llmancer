@@ -265,7 +265,7 @@ end
 ---@return table[] messages Formatted messages for API
 local function prepare_messages_for_api(history)
   local messages = {}
-  
+
   -- Convert messages to API format
   for _, msg in ipairs(history) do
     if msg.role ~= "system" then
@@ -275,7 +275,7 @@ local function prepare_messages_for_api(history)
       })
     end
   end
-  
+
   return messages
 end
 
@@ -307,7 +307,7 @@ function M.send_to_anthropic(message)
   -- Get conversation history and prepare messages
   local history = M.chat_history[bufnr] or {}
   local messages = prepare_messages_for_api(history)
-  
+
   -- Add current message to messages array
   vim.list_extend(messages, message)
 
@@ -411,7 +411,7 @@ local function get_latest_user_message()
   local message_number = nil
   local separator_line = nil
 
-  -- First, find the separator line
+  -- First, find the separator line (the dashed line)
   for i, line in ipairs(lines) do
     if line:match("^%-%-%-%-%-%-%-%-%-%-%-%-") then
       separator_line = i
@@ -425,55 +425,77 @@ local function get_latest_user_message()
 
   -- Find the last user message by scanning backwards from the end
   local in_message = false
-  local last_user_num = nil
+  local message_start = nil
 
-  -- Count total user messages to determine message number
-  local user_message_count = 0
-  for i = separator_line, #lines do
-    if lines[i]:match("^user %((%d+)%)") then
-      user_message_count = user_message_count + 1
-    end
-  end
-
-  -- Scan backwards to find last message
   for i = #lines, separator_line, -1 do
     local line = lines[i]
     local user_num = line:match("^user %((%d+)%):")
 
-    if user_num then
-      -- Found a user message
-      if not last_user_num then
-        last_user_num = tonumber(user_num)
-        message_number = user_message_count + 1
-        in_message = true
-
-        -- Add everything after the "user (N):" prefix
-        local msg_content = line:match("^user %([%d]+%):%s*(.*)$")
-        if msg_content and msg_content ~= "" then
-          table.insert(content, 1, msg_content)
+    if user_num and not message_start then
+      message_start = i
+      message_number = tonumber(user_num)
+      in_message = true
+    elseif message_start and (line:match("^[^:]+:") or line:match("^%-%-%-")) then
+      -- Get all lines between message_start and this line
+      for j = i + 1, message_start do
+        local msg_line = lines[j]
+        if j == message_start then
+          msg_line = msg_line:match("^user %([%d]+%):%s*(.*)$") or ""
         end
+        table.insert(content, msg_line)
       end
-    elseif in_message then
-      -- Stop if we hit another message
-      if line:match("^[^:]+:") then
-        break
+      break
+    elseif i == separator_line + 1 and message_start then
+      for j = i, message_start do
+        local msg_line = lines[j]
+        if j == message_start then
+          msg_line = msg_line:match("^user %([%d]+%):%s*(.*)$") or ""
+        end
+        table.insert(content, msg_line)
       end
-      -- Add the line to our message
-      table.insert(content, 1, line)
+      break
     end
   end
 
   -- If we haven't found a message yet, look for content after the separator
   if #content == 0 then
+    local message_lines = {}
+    local started_content = false
+    local has_content = false -- Add flag to track if we found any non-empty content
+
     for i = separator_line + 1, #lines do
       local line = lines[i]
-      -- Skip empty lines and prompts
-      if line ~= "" and not line:match("^user %([%d]+%):%s*$") and not line:match("^[^:]+:") then
-        table.insert(content, line)
+
+      -- Skip only specific prompts
+      local is_user_prompt = line:match("^user %([%d]+%):%s*$") ~= nil
+      local is_system_prompt = line:match("^(system|assistant|user):%s*$") ~= nil
+
+      if not is_user_prompt and not is_system_prompt then
+        -- If we find a non-empty line, mark that we've started content
+        if line ~= "" then
+          started_content = true
+          has_content = true -- Set flag when we find non-empty content
+        end
+
+        -- Only add the line if we've started content
+        if started_content then
+          table.insert(message_lines, line)
+        end
       end
     end
-    -- This is the first message
-    message_number = 1
+
+    -- Remove trailing empty lines
+    while #message_lines > 0 and message_lines[#message_lines] == "" do
+      table.remove(message_lines, #message_lines)
+    end
+
+    -- Only add to content if we found actual content
+    if has_content then
+      for _, line in ipairs(message_lines) do
+        table.insert(content, line)
+      end
+      message_number = 1
+    end
   end
 
   return table.concat(content, '\n'), message_number
@@ -621,14 +643,14 @@ end
 ---@param target_bufnr number|nil The target buffer number (defaults to alternate buffer)
 function M.set_target_buffer(chat_bufnr, target_bufnr)
   target_bufnr = target_bufnr or vim.fn.bufnr('#')
-  
-  vim.notify(string.format("Setting target buffer - Chat: %d, Target: %d", chat_bufnr, target_bufnr), vim.log.levels.DEBUG)
+
+  -- vim.notify(string.format("Setting target buffer - Chat: %d, Target: %d", chat_bufnr, target_bufnr), vim.log.levels.DEBUG)
 
   if target_bufnr ~= -1 and vim.api.nvim_buf_is_valid(target_bufnr) then
     M.target_buffers[chat_bufnr] = target_bufnr
-    vim.notify(string.format("Target buffer set successfully - Chat: %d, Target: %d", chat_bufnr, target_bufnr), vim.log.levels.DEBUG)
+    -- vim.notify(string.format("Target buffer set successfully - Chat: %d, Target: %d", chat_bufnr, target_bufnr), vim.log.levels.DEBUG)
   else
-    vim.notify(string.format("Failed to set target buffer - Chat: %d, Target: %d (invalid)", chat_bufnr, target_bufnr), vim.log.levels.WARN)
+    -- vim.notify(string.format("Failed to set target buffer - Chat: %d, Target: %d (invalid)", chat_bufnr, target_bufnr), vim.log.levels.WARN)
   end
 end
 
@@ -642,7 +664,7 @@ function M.get_system_role()
     local system_prompt_lines = vim.fn.readfile(system_prompt_path)
     system_content = table.concat(system_prompt_lines, '\n')
   else
-    vim.notify("System prompt not found", vim.log.levels.ERROR)
+    -- vim.notify("System prompt not found", vim.log.levels.ERROR)
   end
 
   return system_content
@@ -651,14 +673,14 @@ end
 -- Add this function to help with debugging target buffer setup
 function M.debug_target_buffer_state()
   local bufnr = vim.api.nvim_get_current_buf()
-  vim.notify(string.format("Debug target buffer state for chat buffer %d:", bufnr), vim.log.levels.DEBUG)
-  vim.notify(string.format("Current alternate buffer: %d", vim.fn.bufnr('#')), vim.log.levels.DEBUG)
-  vim.notify(string.format("Is current buffer valid: %s", tostring(vim.api.nvim_buf_is_valid(bufnr))), vim.log.levels.DEBUG)
-  
+  -- vim.notify(string.format("Debug target buffer state for chat buffer %d:", bufnr), vim.log.levels.DEBUG)
+  -- vim.notify(string.format("Current alternate buffer: %d", vim.fn.bufnr('#')), vim.log.levels.DEBUG)
+  -- vim.notify(string.format("Is current buffer valid: %s", tostring(vim.api.nvim_buf_is_valid(bufnr))), vim.log.levels.DEBUG)
+
   local target_bufnr = M.target_buffers[bufnr]
   if target_bufnr then
-    vim.notify(string.format("Target buffer: %d", target_bufnr), vim.log.levels.DEBUG)
-    vim.notify(string.format("Is target buffer valid: %s", tostring(vim.api.nvim_buf_is_valid(target_bufnr))), vim.log.levels.DEBUG)
+    -- vim.notify(string.format("Target buffer: %d", target_bufnr), vim.log.levels.DEBUG)
+    -- vim.notify(string.format("Is target buffer valid: %s", tostring(vim.api.nvim_buf_is_valid(target_bufnr))), vim.log.levels.DEBUG)
   else
     vim.notify("No target buffer set", vim.log.levels.DEBUG)
   end
@@ -818,7 +840,7 @@ local function setup_buffer_mappings(bufnr)
     { noremap = true, silent = true, desc = "Create plan from last response" })
 
   -- Update cleanup autocmds to use M.cleanup_buffer
-  vim.api.nvim_create_autocmd({"BufDelete", "BufWipeout"}, {
+  vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
     buffer = bufnr,
     callback = function()
       require('llmancer.chat').cleanup_buffer(bufnr)
@@ -911,16 +933,16 @@ function M.create_plan_from_last_response()
   end
 
   local bufnr = vim.api.nvim_get_current_buf()
-  vim.notify(string.format("Current buffer (chat): %d", bufnr), vim.log.levels.DEBUG)
-  
+  -- vim.notify(string.format("Current buffer (chat): %d", bufnr), vim.log.levels.DEBUG)
+
   -- Debug target buffers table
-  vim.notify("Target buffers table:", vim.log.levels.DEBUG)
-  for chat_buf, target_buf in pairs(M.target_buffers) do
-    vim.notify(string.format("Chat buf: %d -> Target buf: %d", chat_buf, target_buf), vim.log.levels.DEBUG)
-  end
+  -- vim.notify("Target buffers table:", vim.log.levels.DEBUG)
+  -- for chat_buf, target_buf in pairs(M.target_buffers) do
+  -- vim.notify(string.format("Chat buf: %d -> Target buf: %d", chat_buf, target_buf), vim.log.levels.DEBUG)
+  -- end
 
   local target_bufnr = M.target_buffers[bufnr]
-  vim.notify(string.format("Found target buffer: %s", tostring(target_bufnr)), vim.log.levels.DEBUG)
+  -- vim.notify(string.format("Found target buffer: %s", tostring(target_bufnr)), vim.log.levels.DEBUG)
 
   if not target_bufnr then
     vim.notify("No target buffer associated with this chat", vim.log.levels.ERROR)
@@ -980,20 +1002,20 @@ M.setup_buffer_mappings = setup_buffer_mappings
 -- Add cleanup_buffer to the module instead of keeping it local
 function M.cleanup_buffer(bufnr)
   vim.notify(string.format("Cleaning up buffer %d", bufnr), vim.log.levels.DEBUG)
-  
+
   -- Cancel any active job
   if M.active_jobs[bufnr] then
     vim.notify(string.format("Cancelling active job for buffer %d", bufnr), vim.log.levels.DEBUG)
     M.active_jobs[bufnr]:shutdown()
     M.active_jobs[bufnr] = nil
   end
-  
+
   -- Clean up chat history
   if M.chat_history[bufnr] then
     vim.notify(string.format("Cleaning chat history for buffer %d", bufnr), vim.log.levels.DEBUG)
     M.chat_history[bufnr] = nil
   end
-  
+
   -- Clean up target buffers
   if M.target_buffers[bufnr] then
     vim.notify(string.format("Cleaning target buffer association for buffer %d", bufnr), vim.log.levels.DEBUG)
