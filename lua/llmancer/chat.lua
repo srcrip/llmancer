@@ -5,7 +5,6 @@
 ---@field role "user"|"assistant"|"system" The role of the message sender
 
 ---@class ChatModule
----@field chat_history table<number, ChatMessage[]> Store chat history for each buffer
 ---@field send_message fun() Function to send message
 ---@field view_conversation fun() Function to view the conversation
 ---@field send_to_anthropic fun(message: Message[]) Function to send message to Anthropic
@@ -20,7 +19,6 @@ local main = require('llmancer.main')
 local indicators = require('llmancer.indicators')
 
 -- Module state
-M.chat_history = {}  ---@type table<number, ChatMessage[]>
 M.target_buffers = {} ---@type table<number, number>
 M.active_jobs = {} ---@type table<number, plenary.Job>
 M.is_waiting_response = {} ---@type table<number, boolean>
@@ -28,6 +26,83 @@ M.is_waiting_response = {} ---@type table<number, boolean>
 -- Add these constants at the top of the file
 local SECTION_SEPARATOR = "---"
 local CHAT_SEPARATOR = "----------------------------------------"
+
+-- At the top with other helper functions, after the constants
+-- Parse the chat buffer into a sequence of messages
+---@param bufnr number The buffer number to parse
+---@return table[] messages Array of message objects {role, content}
+local function parse_chat_buffer(bufnr)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local messages = {}
+  local current_msg = nil
+  local in_params = false
+  local found_separator = false
+  
+  -- Valid roles for the API
+  local valid_roles = {
+    user = true,
+    assistant = true,
+    system = true
+  }
+  
+  for i, line in ipairs(lines) do
+    -- Skip parameter section
+    if line == SECTION_SEPARATOR then
+      in_params = not in_params
+      goto continue
+    end
+    if in_params then
+      goto continue
+    end
+    
+    -- When we hit the separator, start collecting the first message
+    if line == CHAT_SEPARATOR then
+      found_separator = true
+      goto continue
+    end
+    
+    -- After separator, collect first message until we hit a role marker
+    if found_separator and not current_msg then
+      local trimmed = vim.trim(line)
+      if trimmed ~= "" and not trimmed:match("^[^:]+:") then
+        current_msg = {
+          role = "user",
+          content = trimmed
+        }
+        goto continue
+      end
+    end
+    
+    -- Check for message start
+    local role = line:match("^(%w+):%s*")
+    if role and valid_roles[role] then
+      if current_msg then
+        current_msg.content = vim.trim(current_msg.content)
+        if current_msg.content ~= "" then
+          table.insert(messages, current_msg)
+        end
+      end
+      
+      current_msg = {
+        role = role,
+        content = line:sub(#role + 2)
+      }
+    elseif current_msg then
+      current_msg.content = current_msg.content .. "\n" .. line
+    end
+    
+    ::continue::
+  end
+  
+  if current_msg then
+    current_msg.content = vim.trim(current_msg.content)
+    if current_msg.content ~= "" then
+      table.insert(messages, current_msg)
+    end
+  end
+  
+  return messages
+end
 
 -- Helper functions
 ---@param code_str string The Lua code to evaluate
@@ -272,7 +347,7 @@ local function handle_stream_chunk(chunk, bufnr, accumulated_text)
     -- If this is the first chunk, add the model prefix and a newline
     if #accumulated_text == #new_text then
       vim.api.nvim_buf_set_lines(bufnr, -2, -1, false, { "" })
-      local prefix = config.values.model .. ":"
+      local prefix = "assistant:"
       if new_text:sub(1, 3) == "```" then
         prefix = prefix .. "\n\n"
       else
@@ -289,19 +364,6 @@ local function handle_stream_chunk(chunk, bufnr, accumulated_text)
 
     -- If this is the last chunk, store in chat history
     if content_delta.delta.stop_reason then
-      -- Initialize history for this buffer if needed
-      if not M.chat_history[bufnr] then
-        M.chat_history[bufnr] = {}
-      end
-
-      -- Add the assistant response to chat history
-      table.insert(M.chat_history[bufnr], {
-        content = accumulated_text,
-        id = M.generate_id(),
-        opts = { visible = true },
-        role = "assistant"
-      })
-
       -- Add next prompt and save
       add_next_prompt(bufnr)
       M.save_chat(bufnr)
@@ -314,22 +376,16 @@ end
 -- Move save_chat to be part of the module instead of local
 function M.save_chat(bufnr)
   local chat_name = vim.api.nvim_buf_get_name(bufnr)
-
-  -- Extract just the filename without extension from the full path
-  local chat_id = vim.fn.fnamemodify(chat_name, ':t:r')
-
-  if not chat_id then
-    vim.notify("Could not extract chat ID from buffer name: " .. chat_name, vim.log.levels.ERROR)
+  
+  if chat_name == "" then
+    vim.notify("Buffer has no name", vim.log.levels.ERROR)
     return
   end
 
-  -- Since we're already using the full path as the buffer name, we can just write to it directly
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local success = vim.fn.writefile(lines, chat_name)
 
-  if success == 0 then
-    vim.notify("Chat saved to " .. chat_name, vim.log.levels.DEBUG)
-  else
+  if success ~= 0 then
     vim.notify("Failed to save chat to " .. chat_name, vim.log.levels.ERROR)
   end
 end
@@ -344,7 +400,7 @@ local function add_next_prompt(bufnr)
   vim.api.nvim_win_set_cursor(0, { line_count, #next_prompt })
 end
 
--- Update send_to_anthropic to handle auth errors
+-- Update send_to_anthropic to add debug logging
 function M.send_to_anthropic(message)
   -- Check for API key before proceeding
   if not config.values.anthropic_api_key or config.values.anthropic_api_key == "" then
@@ -369,27 +425,34 @@ function M.send_to_anthropic(message)
   -- Build system prompt
   local system = M.build_system_prompt()
 
-  -- Get conversation history and prepare messages
-  local history = M.chat_history[bufnr] or {}
-  local messages = {}
-
-  -- Convert messages to API format
-  for _, msg in ipairs(history) do
-    if msg.role ~= "system" then
-      table.insert(messages, {
-        role = msg.role,
-        content = msg.content
-      })
+  -- Parse chat history from buffer
+  local messages = parse_chat_buffer(bufnr)
+  
+  -- Check if the current message is already in history
+  local new_message = message[1]
+  local is_duplicate = false
+  
+  -- Check the last message in history
+  if #messages > 0 and messages[#messages].role == new_message.role then
+    if messages[#messages].content == new_message.content then
+      is_duplicate = true
     end
   end
-
-  -- Add current message to messages array
-  vim.list_extend(messages, message)
+  
+  -- Only add the message if it's not a duplicate
+  if not is_duplicate then
+    if #message == 1 then
+      table.insert(messages, message[1])
+    else
+      vim.notify("Warning: Multiple messages in current message array", vim.log.levels.WARN)
+      table.insert(messages, message[1])
+    end
+  end
 
   -- Track the accumulated response
   local accumulated_text = ""
   local had_error = false
-
+  
   -- Prepare request body
   local body = vim.fn.json_encode({
     model = params.model,
@@ -399,6 +462,17 @@ function M.send_to_anthropic(message)
     system = system,
     stream = true,
   })
+
+  -- Write request to debug log
+  local module_path = debug.getinfo(1).source:sub(2)
+  local base_dir = vim.fn.fnamemodify(module_path, ':h:h:h')
+  local debug_file = base_dir .. '/debug_log.txt'
+  
+  local f = io.open(debug_file, "a")
+  if f then
+    f:write(string.format("\n\n=== Request %s ===\n%s\n", os.date("%Y-%m-%d %H:%M:%S"), body))
+    f:close()
+  end
 
   local job = Job:new({
     command = 'curl',
@@ -431,8 +505,9 @@ function M.send_to_anthropic(message)
             return
           elseif status ~= "200" then
             had_error = true
+            -- Log the full response for debugging
             vim.notify(
-              "API request failed with status " .. status,
+              "API request failed with status " .. status .. "\nResponse: " .. chunk,
               vim.log.levels.ERROR
             )
             if M.active_jobs[bufnr] then
@@ -477,7 +552,7 @@ local function get_latest_user_message()
 
   -- First, find the separator line (the dashed line)
   for i, line in ipairs(lines) do
-    if line:match("^%-%-%-%-%-%-%-%-%-%-%-%-") then
+    if line == CHAT_SEPARATOR then
       separator_line = i
       break
     end
@@ -523,22 +598,31 @@ local function get_latest_user_message()
       table.insert(content, line)
     end
   else
-    -- Handle initial message after separator
+    -- If no user message found, get content after separator
     local message_lines = {}
-    local started_content = false
-    local has_content = false
-
+    local found_content = false
+    
     for i = separator_line + 1, #lines do
-      local line = lines[i]
-      if not line:match("^[^:]+:") and line ~= "" then
-        started_content = true
-        has_content = true
-        table.insert(message_lines, line)
+      local line = vim.trim(lines[i])
+      -- Skip empty lines and role markers at the start
+      if not found_content then
+        if line ~= "" and not line:match("^[^:]+:") then
+          found_content = true
+          table.insert(message_lines, line)
+        end
+      else
+        -- Stop at next role marker
+        if line:match("^[^:]+:") then
+          break
+        end
+        if line ~= "" then
+          table.insert(message_lines, line)
+        end
       end
     end
-
-    if has_content then
-      content = message_lines
+    
+    if #message_lines > 0 then
+      return table.concat(message_lines, '\n')
     end
   end
 
@@ -615,16 +699,16 @@ function M.view_conversation()
 
   -- Create and open floating window with title
   local win_opts = create_floating_window(" Chat History ")
-
   vim.api.nvim_open_win(bufnr, true, win_opts)
 
   -- Setup buffer options and mappings
   setup_floating_buffer(bufnr, 'json')
 
-  local history = M.chat_history[source_bufnr] or {}
+  -- Parse chat history from buffer
+  local messages = parse_chat_buffer(source_bufnr)
 
   -- Convert history to string
-  local content = vim.fn.json_encode(history)
+  local content = vim.fn.json_encode(messages)
   -- Pretty print the JSON with fallback if jq is not available
   local jq_result = vim.fn.system('which jq >/dev/null 2>&1 && echo ' ..
     vim.fn.shellescape(content) .. ' | jq . || echo ' .. vim.fn.shellescape(content))
@@ -709,7 +793,7 @@ function M.get_system_role()
   return system_content
 end
 
--- Update send_message to set the state before sending request
+-- Update send_message to not use chat_history
 function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
   
@@ -726,20 +810,6 @@ function M.send_message()
   -- Set target buffer if not already set
   if not M.target_buffers[bufnr] then
     M.set_target_buffer(bufnr)
-  end
-
-  -- Initialize history for this buffer if it doesn't exist
-  if not M.chat_history[bufnr] then
-    local system_content = M.get_system_role()
-
-    M.chat_history[bufnr] = {
-      {
-        content = system_content,
-        id = M.generate_id(),
-        opts = { visible = false },
-        role = "system"
-      }
-    }
   end
 
   -- Get latest user message
@@ -778,14 +848,6 @@ function M.send_message()
   if context_content ~= "" then
     full_content = context_content .. "\n\n" .. content
   end
-
-  -- Add user message to history
-  table.insert(M.chat_history[bufnr], {
-    content = full_content,
-    id = M.generate_id(),
-    opts = { visible = true },
-    role = "user"
-  })
 
   -- Prepare message format for API
   ---@type Message[]
@@ -1036,11 +1098,6 @@ function M.cleanup_buffer(bufnr)
   if M.active_jobs[bufnr] then
     M.active_jobs[bufnr]:shutdown()
     M.active_jobs[bufnr] = nil
-  end
-
-  -- Clean up chat history
-  if M.chat_history[bufnr] then
-    M.chat_history[bufnr] = nil
   end
 
   -- Clean up target buffers
