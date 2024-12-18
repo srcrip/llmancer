@@ -21,8 +21,11 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
         "ibhagwan/fzf-lua"
     },
     config = function()
-        require('llmancer').setup({
-            anthropic_api_key = 'your-api-key-here', -- Required
+        local llmancer = require('llmancer')
+
+        llmancer.setup({
+            anthropic_api_key = 'your-api-key-here', -- Required or:
+            -- alternatively, the plugin will look for ANTHROPIC_API_KEY in your environment if you leave that blank
             -- Optional configuration...
             model = 'claude-3-sonnet-20240229',
             max_tokens = 4096,
@@ -30,12 +33,12 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
             close_chat_buffer_on_win_closed = true, -- Whether to close the chat buffer when its window is closed
             add_files_to_new_chat = "all", -- Which files to add to context when creating a new chat ("all", "current", or "none")
         })
+
+        -- example keymaps
+        vim.keymap.set('n', '<leader>ll', llmancer.open_chat, { desc = "Open chat" })
+        vim.keymap.set('v', '<leader>le', llmancer.edit_selection, { desc = "Edit selection" })
+        vim.keymap.set('n', '<leader>lc', llmancer.list_chats, { desc = "List chats" })
     end,
-    keys = {
-        { "<leader>ll", "<cmd>lua require('llmancer').open_chat()<cr>",              desc = "AI: open chat" },
-        { "<leader>le", "<cmd>lua require('llmancer.inline_edit').start_edit()<cr>", desc = "AI: edit selection", mode = "v" },
-        { "<leader>lc", "<cmd>lua require('llmancer').list_chats()<cr>",             desc = "AI: list chats" },
-    },
 },
 ```
 

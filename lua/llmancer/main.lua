@@ -1,14 +1,10 @@
----@class CustomModule
----@field config Config Current configuration
----@field setup fun(opts: Config|nil) Setup function
----@field open_chat fun() Function to open chat buffer
----@field list_chats fun() Function to list saved chats
 local M = {}
 
 -- At the top of the file, add:
 local utils = require('llmancer.utils')
 local config = require('llmancer.config')
 local indicators = require('llmancer.indicators')
+local inline_edit = require('llmancer.inline_edit')
 
 -- At the top with other helper functions, before M.setup
 local function save_chat_state(bufnr)
@@ -50,7 +46,7 @@ local function get_or_create_chat_buffer(chat_name)
   -- Check if buffer already exists for this file
   local existing_bufnr = vim.fn.bufnr(file_path)
   vim.notify(string.format("get_or_create_chat_buffer - Existing buffer: %s", existing_bufnr), vim.log.levels.DEBUG)
-  
+
   if existing_bufnr ~= -1 then
     vim.notify("get_or_create_chat_buffer - Using existing buffer", vim.log.levels.DEBUG)
     open_buffer_split(existing_bufnr)
@@ -61,7 +57,7 @@ local function get_or_create_chat_buffer(chat_name)
   local bufnr = vim.api.nvim_create_buf(true, false) -- Listed buffer, not scratch
   vim.api.nvim_buf_set_name(bufnr, file_path)
   vim.notify(string.format("get_or_create_chat_buffer - Created new buffer: %d", bufnr), vim.log.levels.DEBUG)
-  
+
   open_buffer_split(bufnr)
   return bufnr
 end
@@ -161,7 +157,7 @@ function M.setup(opts)
   vim.api.nvim_create_user_command('LLMToggle', function()
     local current_buf = vim.api.nvim_get_current_buf()
     local is_llmancer = vim.bo[current_buf].filetype == "llmancer"
-    
+
     if is_llmancer then
       vim.cmd("close")
     else
@@ -170,7 +166,7 @@ function M.setup(opts)
       if last_chat and last_chat.chat_id then
         local chat_file = config.values.storage_dir .. '/' .. last_chat.chat_id .. '.llmc'
         local file_exists = vim.fn.filereadable(chat_file) == 1
-        
+
         if file_exists then
           M.open_chat(last_chat.chat_id)
         else
@@ -300,7 +296,7 @@ end
 -- Buffer management functions
 local function create_chat_buffer(chat_id)
   local file_path = config.values.storage_dir .. '/' .. chat_id .. '.llmc'
-  
+
   -- Check if buffer already exists
   local existing_bufnr = vim.fn.bufnr(file_path)
   if existing_bufnr ~= -1 then
@@ -345,9 +341,9 @@ local function collect_open_files()
     for _, buf in ipairs(all_bufs) do
       local filename = vim.api.nvim_buf_get_name(buf)
       -- Filter out .llmc files and ensure file is listed
-      if filename ~= "" and 
-         vim.fn.buflisted(buf) == 1 and 
-         not filename:match("%.llmc$") then
+      if filename ~= "" and
+          vim.fn.buflisted(buf) == 1 and
+          not filename:match("%.llmc$") then
         table.insert(open_files, filename)
       end
     end
@@ -421,12 +417,12 @@ end
 function M.open_chat(chat_id)
   chat_id = chat_id or generate_chat_id()
   local bufnr = create_chat_buffer(chat_id)
-  
+
   if not load_chat_content(bufnr) then
     local open_files = collect_open_files()
     init_new_chat_content(bufnr, open_files)
   end
-  
+
   return bufnr
 end
 
@@ -523,6 +519,11 @@ function M.list_chats()
       }
     }
   )
+end
+
+---Start inline editing for the current visual selection
+function M.edit_selection()
+  inline_edit.start_edit()
 end
 
 -- Function to load a chat history

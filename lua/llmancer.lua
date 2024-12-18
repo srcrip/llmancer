@@ -15,21 +15,15 @@ local main = require("llmancer.main")
 ---@field setup fun(opts: Config|nil) Function to setup the plugin
 ---@field open_chat fun() Function to open the chat buffer
 ---@field list_chats fun() Function to list saved chats
+---@field edit_selection fun() Function to edit the selection
 ---@field config Config The current configuration
 local M = {}
 
--- Forward the setup function
----@param opts Config|nil
+-- Forward all public functions and config
 M.setup = main.setup
-
--- Forward the open_chat function
 M.open_chat = main.open_chat
-
--- Forward the list_chats function
 M.list_chats = main.list_chats
-
--- Forward the config
----@type Config
+M.edit_selection = main.edit_selection
 M.config = main.config
 
 return M

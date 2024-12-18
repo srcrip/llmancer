@@ -34,8 +34,6 @@ local CHAT_SEPARATOR = "----------------------------------------"
 ---@return table|nil result The evaluated result or nil if error
 ---@return string|nil error The error message if evaluation failed
 local function safe_eval_lua(code_str)
-  vim.notify("Evaluating Lua code: " .. code_str, vim.log.levels.DEBUG)
-  
   local chunk, load_err = loadstring("return " .. code_str)
   if not chunk then
     return nil, "Failed to load Lua code: " .. (load_err or "unknown error")
@@ -46,7 +44,6 @@ local function safe_eval_lua(code_str)
     return nil, "Failed to execute Lua code: " .. tostring(result)
   end
 
-  vim.notify("Successfully evaluated code", vim.log.levels.DEBUG)
   return result
 end
 
@@ -54,21 +51,15 @@ end
 ---@param bufnr number The buffer number
 ---@return table|nil context The parsed context or nil if invalid
 local function load_buffer_context(bufnr)
-  vim.notify("Loading buffer context from buffer " .. bufnr, vim.log.levels.DEBUG)
-  
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local in_params = false
   local params_lines = {}
   
   for i, line in ipairs(lines) do
-    vim.notify(string.format("Scanning line %d: %s", i, line), vim.log.levels.DEBUG)
-    
     if line == SECTION_SEPARATOR then
       if not in_params then
-        vim.notify("Found start of params at line " .. i, vim.log.levels.DEBUG)
         in_params = true
       else
-        vim.notify("Found end of params at line " .. i, vim.log.levels.DEBUG)
         break
       end
     elseif in_params and line ~= "" then  -- Skip empty lines in params section
@@ -77,13 +68,10 @@ local function load_buffer_context(bufnr)
   end
 
   if #params_lines == 0 then
-    vim.notify("Failed to find valid params section", vim.log.levels.WARN)
     return nil
   end
 
   local params_str = table.concat(params_lines, "\n")
-  vim.notify("Attempting to parse params: " .. params_str, vim.log.levels.DEBUG)
-  
   local result, err = safe_eval_lua(params_str)
   if err then
     vim.notify("Error parsing params: " .. err, vim.log.levels.WARN)
@@ -96,8 +84,6 @@ end
 ---@param bufnr number The buffer number
 ---@param context table The context to write
 local function write_buffer_context(bufnr, context)
-  vim.notify("Writing context to buffer " .. bufnr, vim.log.levels.DEBUG)
-  
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local start_idx = nil
   local end_idx = nil
@@ -135,7 +121,6 @@ local function write_buffer_context(bufnr, context)
   -- Add everything after params
   vim.list_extend(new_lines, vim.list_slice(lines, end_idx, #lines))
 
-  vim.notify("Writing new buffer content with " .. #new_lines .. " lines", vim.log.levels.DEBUG)
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, new_lines)
   
   return true
@@ -144,8 +129,6 @@ end
 -- Then the toggle function that depends on both of those
 function M.toggle_file_in_context(filename)
   local bufnr = vim.api.nvim_get_current_buf()
-  
-  vim.notify("Toggling file in context: " .. filename, vim.log.levels.DEBUG)
   
   -- Check if we're in a chat buffer
   if vim.bo.filetype ~= "llmancer" then
@@ -705,13 +688,9 @@ end
 function M.set_target_buffer(chat_bufnr, target_bufnr)
   target_bufnr = target_bufnr or vim.fn.bufnr('#')
 
-  -- vim.notify(string.format("Setting target buffer - Chat: %d, Target: %d", chat_bufnr, target_bufnr), vim.log.levels.DEBUG)
-
   if target_bufnr ~= -1 and vim.api.nvim_buf_is_valid(target_bufnr) then
     M.target_buffers[chat_bufnr] = target_bufnr
-    -- vim.notify(string.format("Target buffer set successfully - Chat: %d, Target: %d", chat_bufnr, target_bufnr), vim.log.levels.DEBUG)
   else
-    -- vim.notify(string.format("Failed to set target buffer - Chat: %d, Target: %d (invalid)", chat_bufnr, target_bufnr), vim.log.levels.WARN)
   end
 end
 
@@ -725,7 +704,6 @@ function M.get_system_role()
     local system_prompt_lines = vim.fn.readfile(system_prompt_path)
     system_content = table.concat(system_prompt_lines, '\n')
   else
-    -- vim.notify("System prompt not found", vim.log.levels.ERROR)
   end
 
   return system_content
@@ -985,16 +963,8 @@ function M.create_plan_from_last_response()
   end
 
   local bufnr = vim.api.nvim_get_current_buf()
-  -- vim.notify(string.format("Current buffer (chat): %d", bufnr), vim.log.levels.DEBUG)
-
-  -- Debug target buffers table
-  -- vim.notify("Target buffers table:", vim.log.levels.DEBUG)
-  -- for chat_buf, target_buf in pairs(M.target_buffers) do
-  -- vim.notify(string.format("Chat buf: %d -> Target buf: %d", chat_buf, target_buf), vim.log.levels.DEBUG)
-  -- end
 
   local target_bufnr = M.target_buffers[bufnr]
-  -- vim.notify(string.format("Found target buffer: %s", tostring(target_bufnr)), vim.log.levels.DEBUG)
 
   if not target_bufnr then
     vim.notify("No target buffer associated with this chat", vim.log.levels.ERROR)
