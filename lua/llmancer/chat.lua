@@ -296,19 +296,36 @@ local function append_to_buffer_streaming(bufnr, new_text)
   end
 
   local last_line_idx = vim.api.nvim_buf_line_count(bufnr) - 1
-  local last_line = vim.api.nvim_buf_get_lines(bufnr, last_line_idx, last_line_idx + 1, false)[1]
+  
+  -- Additional validation before getting last line
+  if last_line_idx < 0 then
+    return false
+  end
+
+  -- Safely get last line with pcall
+  local ok, last_line = pcall(vim.api.nvim_buf_get_lines, bufnr, last_line_idx, last_line_idx + 1, false)
+  if not ok or not last_line or #last_line == 0 then
+    return false
+  end
+  last_line = last_line[1]
 
   -- Split the new text into lines
   local lines = vim.split(new_text, "\n", { plain = true })
 
-  -- Update the last line with the first part
-  vim.api.nvim_buf_set_lines(bufnr, last_line_idx, last_line_idx + 1, false,
+  -- Safely update the last line
+  ok = pcall(vim.api.nvim_buf_set_lines, bufnr, last_line_idx, last_line_idx + 1, false,
     { last_line .. lines[1] })
+  if not ok then
+    return false
+  end
 
   -- Add any additional lines
   if #lines > 1 then
-    vim.api.nvim_buf_set_lines(bufnr, last_line_idx + 1, last_line_idx + 1, false,
+    ok = pcall(vim.api.nvim_buf_set_lines, bufnr, last_line_idx + 1, last_line_idx + 1, false,
       vim.list_slice(lines, 2))
+    if not ok then
+      return false
+    end
   end
 
   return true
@@ -346,7 +363,10 @@ local function handle_stream_chunk(chunk, bufnr, accumulated_text)
 
     -- If this is the first chunk, add the model prefix and a newline
     if #accumulated_text == #new_text then
-      vim.api.nvim_buf_set_lines(bufnr, -2, -1, false, { "" })
+      -- Safely add new lines
+      local ok = pcall(vim.api.nvim_buf_set_lines, bufnr, -2, -1, false, { "" })
+      if not ok then return end
+      
       local prefix = "assistant:"
       if new_text:sub(1, 3) == "```" then
         prefix = prefix .. "\n\n"
@@ -364,9 +384,11 @@ local function handle_stream_chunk(chunk, bufnr, accumulated_text)
 
     -- If this is the last chunk, store in chat history
     if content_delta.delta.stop_reason then
-      -- Add next prompt and save
-      add_next_prompt(bufnr)
-      M.save_chat(bufnr)
+      -- Only proceed if buffer is still valid
+      if vim.api.nvim_buf_is_valid(bufnr) then
+        add_next_prompt(bufnr)
+        M.save_chat(bufnr)
+      end
     end
   end)
 
