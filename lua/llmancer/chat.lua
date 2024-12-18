@@ -670,22 +670,6 @@ function M.get_system_role()
   return system_content
 end
 
--- Add this function to help with debugging target buffer setup
-function M.debug_target_buffer_state()
-  local bufnr = vim.api.nvim_get_current_buf()
-  -- vim.notify(string.format("Debug target buffer state for chat buffer %d:", bufnr), vim.log.levels.DEBUG)
-  -- vim.notify(string.format("Current alternate buffer: %d", vim.fn.bufnr('#')), vim.log.levels.DEBUG)
-  -- vim.notify(string.format("Is current buffer valid: %s", tostring(vim.api.nvim_buf_is_valid(bufnr))), vim.log.levels.DEBUG)
-
-  local target_bufnr = M.target_buffers[bufnr]
-  if target_bufnr then
-    -- vim.notify(string.format("Target buffer: %d", target_bufnr), vim.log.levels.DEBUG)
-    -- vim.notify(string.format("Is target buffer valid: %s", tostring(vim.api.nvim_buf_is_valid(target_bufnr))), vim.log.levels.DEBUG)
-  else
-    vim.notify("No target buffer set", vim.log.levels.DEBUG)
-  end
-end
-
 -- Update send_message to set target buffer if not already set
 function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
@@ -694,7 +678,6 @@ function M.send_message()
   -- Set target buffer if not already set
   if not M.target_buffers[bufnr] then
     M.set_target_buffer(bufnr)
-    M.debug_target_buffer_state() -- Add debugging info
   end
 
   -- Initialize history for this buffer if it doesn't exist
@@ -1005,20 +988,20 @@ function M.cleanup_buffer(bufnr)
 
   -- Cancel any active job
   if M.active_jobs[bufnr] then
-    vim.notify(string.format("Cancelling active job for buffer %d", bufnr), vim.log.levels.DEBUG)
+    -- vim.notify(string.format("Cancelling active job for buffer %d", bufnr), vim.log.levels.DEBUG)
     M.active_jobs[bufnr]:shutdown()
     M.active_jobs[bufnr] = nil
   end
 
   -- Clean up chat history
   if M.chat_history[bufnr] then
-    vim.notify(string.format("Cleaning chat history for buffer %d", bufnr), vim.log.levels.DEBUG)
+    -- vim.notify(string.format("Cleaning chat history for buffer %d", bufnr), vim.log.levels.DEBUG)
     M.chat_history[bufnr] = nil
   end
 
   -- Clean up target buffers
   if M.target_buffers[bufnr] then
-    vim.notify(string.format("Cleaning target buffer association for buffer %d", bufnr), vim.log.levels.DEBUG)
+    -- vim.notify(string.format("Cleaning target buffer association for buffer %d", bufnr), vim.log.levels.DEBUG)
     M.target_buffers[bufnr] = nil
   end
 end
