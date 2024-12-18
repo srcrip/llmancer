@@ -3,7 +3,6 @@
 ---@field id number A unique identifier
 ---@field opts table Message options
 ---@field role "user"|"assistant"|"system" The role of the message sender
----@field message_number number|nil Message number for user messages
 
 ---@class ChatModule
 ---@field chat_history table<number, ChatMessage[]> Store chat history for each buffer
@@ -13,57 +12,30 @@
 ---@field target_buffers table<number, number> Map of chat bufnr to target bufnr
 ---@field build_system_prompt fun():string Function to build system prompt with current context
 ---@type table<number, plenary.Job> Map of buffer numbers to active jobs
+---@type table<number, boolean> Map of buffer numbers to response waiting state
 local M = {}
 
 local config = require('llmancer.config')
 local main = require('llmancer.main')
 local indicators = require('llmancer.indicators')
 
--- Store chat history for each buffer
----@type table<number, ChatMessage[]>
-M.chat_history = {}
+-- Module state
+M.chat_history = {}  ---@type table<number, ChatMessage[]>
+M.target_buffers = {} ---@type table<number, number>
+M.active_jobs = {} ---@type table<number, plenary.Job>
+M.is_waiting_response = {} ---@type table<number, boolean>
 
--- Store target buffers for each chat buffer
----@type table<number, number> Map of chat bufnr to target bufnr
-M.target_buffers = {}
+-- Add these constants at the top of the file
+local SECTION_SEPARATOR = "---"
+local CHAT_SEPARATOR = "----------------------------------------"
 
--- Add at the top with other module variables:
----@type table<number, plenary.Job> Map of buffer numbers to active jobs
-M.active_jobs = {}
-
--- Function to generate a random ID
----@return number
-function M.generate_id()
-  return math.floor(math.random() * 2 ^ 32)
-end
-
--- Parse parameters from the --- delimited section at the top of the buffer
----@param lines string[] The buffer lines to parse
----@return table|nil params The parsed parameters or nil if invalid
-local function parse_param_section(lines)
-  local in_params = false
-  local params_text = {}
-
-  for _, line in ipairs(lines) do
-    if line == "---" then
-      if not in_params then
-        in_params = true
-      else
-        break
-      end
-    elseif in_params then
-      table.insert(params_text, line)
-    end
-  end
-
-  return params_text
-end
-
--- Safely evaluate Lua code string and return result
+-- Helper functions
 ---@param code_str string The Lua code to evaluate
 ---@return table|nil result The evaluated result or nil if error
 ---@return string|nil error The error message if evaluation failed
 local function safe_eval_lua(code_str)
+  vim.notify("Evaluating Lua code: " .. code_str, vim.log.levels.DEBUG)
+  
   local chunk, load_err = loadstring("return " .. code_str)
   if not chunk then
     return nil, "Failed to load Lua code: " .. (load_err or "unknown error")
@@ -74,35 +46,163 @@ local function safe_eval_lua(code_str)
     return nil, "Failed to execute Lua code: " .. tostring(result)
   end
 
+  vim.notify("Successfully evaluated code", vim.log.levels.DEBUG)
   return result
+end
+
+-- Context management functions
+---@param bufnr number The buffer number
+---@return table|nil context The parsed context or nil if invalid
+local function load_buffer_context(bufnr)
+  vim.notify("Loading buffer context from buffer " .. bufnr, vim.log.levels.DEBUG)
+  
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local in_params = false
+  local params_lines = {}
+  
+  for i, line in ipairs(lines) do
+    vim.notify(string.format("Scanning line %d: %s", i, line), vim.log.levels.DEBUG)
+    
+    if line == SECTION_SEPARATOR then
+      if not in_params then
+        vim.notify("Found start of params at line " .. i, vim.log.levels.DEBUG)
+        in_params = true
+      else
+        vim.notify("Found end of params at line " .. i, vim.log.levels.DEBUG)
+        break
+      end
+    elseif in_params and line ~= "" then  -- Skip empty lines in params section
+      table.insert(params_lines, line)
+    end
+  end
+
+  if #params_lines == 0 then
+    vim.notify("Failed to find valid params section", vim.log.levels.WARN)
+    return nil
+  end
+
+  local params_str = table.concat(params_lines, "\n")
+  vim.notify("Attempting to parse params: " .. params_str, vim.log.levels.DEBUG)
+  
+  local result, err = safe_eval_lua(params_str)
+  if err then
+    vim.notify("Error parsing params: " .. err, vim.log.levels.WARN)
+    return nil
+  end
+
+  return result
+end
+
+---@param bufnr number The buffer number
+---@param context table The context to write
+local function write_buffer_context(bufnr, context)
+  vim.notify("Writing context to buffer " .. bufnr, vim.log.levels.DEBUG)
+  
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local start_idx = nil
+  local end_idx = nil
+  
+  -- Find the params section
+  for i, line in ipairs(lines) do
+    if line == SECTION_SEPARATOR then
+      if not start_idx then
+        start_idx = i
+      else
+        end_idx = i
+        break
+      end
+    end
+  end
+  
+  if not start_idx or not end_idx then
+    vim.notify("Could not find params section in buffer", vim.log.levels.ERROR)
+    return false
+  end
+
+  -- Convert context to lines
+  local context_str = vim.inspect(context)
+  local context_lines = vim.split(context_str, '\n')
+  
+  -- Build new lines array
+  local new_lines = {}
+  
+  -- Add everything before params
+  vim.list_extend(new_lines, vim.list_slice(lines, 1, start_idx))
+  
+  -- Add params
+  vim.list_extend(new_lines, context_lines)
+  
+  -- Add everything after params
+  vim.list_extend(new_lines, vim.list_slice(lines, end_idx, #lines))
+
+  vim.notify("Writing new buffer content with " .. #new_lines .. " lines", vim.log.levels.DEBUG)
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, new_lines)
+  
+  return true
+end
+
+-- Then the toggle function that depends on both of those
+function M.toggle_file_in_context(filename)
+  local bufnr = vim.api.nvim_get_current_buf()
+  
+  vim.notify("Toggling file in context: " .. filename, vim.log.levels.DEBUG)
+  
+  -- Check if we're in a chat buffer
+  if vim.bo.filetype ~= "llmancer" then
+    vim.notify("This command must be run from a chat buffer", vim.log.levels.ERROR)
+    return
+  end
+  
+  -- Load current context
+  local context = load_buffer_context(bufnr)
+  if not context then
+    vim.notify("Could not load context from buffer", vim.log.levels.ERROR)
+    return
+  end
+  
+  -- Initialize files array if it doesn't exist
+  context.context = context.context or {}
+  context.context.files = context.context.files or {}
+  
+  -- Check if file is already in context
+  local found = false
+  for i, file in ipairs(context.context.files) do
+    if file == filename then
+      -- Remove the file
+      table.remove(context.context.files, i)
+      found = true
+      vim.notify("Removed " .. filename .. " from context", vim.log.levels.INFO)
+      break
+    end
+  end
+  
+  -- Add file if it wasn't found
+  if not found then
+    table.insert(context.context.files, filename)
+    vim.notify("Added " .. filename .. " to context", vim.log.levels.INFO)
+  end
+  
+  -- Write context back to buffer
+  if not write_buffer_context(bufnr, context) then
+    vim.notify("Failed to update context in buffer", vim.log.levels.ERROR)
+    return
+  end
+end
+
+-- Function to generate a random ID
+---@return number
+function M.generate_id()
+  return math.floor(math.random() * 2 ^ 32)
 end
 
 -- Get configuration parameters from buffer
 ---@param bufnr number The buffer number
 ---@return table params The configuration parameters
 local function get_buffer_config(bufnr)
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  local params_text = parse_param_section(lines)
-
-  if not params_text or #params_text == 0 then
-    return {
-      params = {
-        model = config.values.model,
-        max_tokens = config.values.max_tokens,
-        temperature = config.values.temperature,
-      },
-      context = {
-        files = {},
-        global = {}
-      }
-    }
-  end
-
-  local params_str = table.concat(params_text, "\n")
-  local result, err = safe_eval_lua(params_str)
-
-  if err then
-    vim.notify("Error parsing parameters: " .. err, vim.log.levels.WARN)
+  local context = load_buffer_context(bufnr)
+  
+  if not context then
+    vim.notify("Using default config due to missing context", vim.log.levels.DEBUG)
     return {
       params = {
         model = config.values.model,
@@ -117,22 +217,23 @@ local function get_buffer_config(bufnr)
   end
 
   -- Ensure required fields exist
-  result.params = result.params or {
+  context.params = context.params or {
     model = config.values.model,
     max_tokens = config.values.max_tokens,
     temperature = config.values.temperature,
   }
-  result.context = result.context or { files = {}, global = {} }
+  context.context = context.context or { files = {}, global = {} }
 
-  return result
+  return context
 end
 
 -- Append text to the buffer, handling newlines appropriately
 ---@param bufnr number The buffer number
 ---@param new_text string The text to append
 local function append_to_buffer_streaming(bufnr, new_text)
-  -- Check if buffer is still valid
-  if not vim.api.nvim_buf_is_valid(bufnr) then
+  -- Check if buffer is still valid and modifiable
+  if not vim.api.nvim_buf_is_valid(bufnr) or 
+     not vim.api.nvim_buf_get_option(bufnr, 'modifiable') then
     return false
   end
 
@@ -152,29 +253,16 @@ local function append_to_buffer_streaming(bufnr, new_text)
       vim.list_slice(lines, 2))
   end
 
-  -- Auto-scroll to the last line and center cursor
-  -- todo: doesn't work
-  -- vim.schedule(function()
-  --   -- Only scroll if we're in the chat buffer
-  --   if vim.api.nvim_get_current_buf() == bufnr then
-  --     local win = vim.api.nvim_get_current_win()
-  --     local new_last_line = vim.api.nvim_buf_line_count(bufnr)
-  --     vim.api.nvim_win_set_cursor(win, { new_last_line, 0 })
-  --     vim.cmd('normal! zz')
-  --   end
-  -- end)
-
   return true
 end
 
 -- Handle a single chunk of streamed response
 ---@param chunk string The raw chunk from the API
 ---@param bufnr number The buffer number
----@param message_number number|nil The message number
 ---@param accumulated_text string The accumulated text so far
 ---@param callback function|nil The callback function
 ---@return string accumulated_text The updated accumulated text
-local function handle_stream_chunk(chunk, bufnr, message_number, accumulated_text)
+local function handle_stream_chunk(chunk, bufnr, accumulated_text)
   -- Look for data: lines
   local data = chunk:match("^data: (.+)")
   if not data then return accumulated_text end
@@ -216,7 +304,7 @@ local function handle_stream_chunk(chunk, bufnr, message_number, accumulated_tex
       end
     end
 
-    -- If this is the last chunk (stop token received), store in chat history
+    -- If this is the last chunk, store in chat history
     if content_delta.delta.stop_reason then
       -- Initialize history for this buffer if needed
       if not M.chat_history[bufnr] then
@@ -228,9 +316,12 @@ local function handle_stream_chunk(chunk, bufnr, message_number, accumulated_tex
         content = accumulated_text,
         id = M.generate_id(),
         opts = { visible = true },
-        role = "assistant",
-        message_number = message_number
+        role = "assistant"
       })
+
+      -- Add next prompt and save
+      add_next_prompt(bufnr)
+      M.save_chat(bufnr)
     end
   end)
 
@@ -260,23 +351,14 @@ function M.save_chat(bufnr)
   end
 end
 
--- Simplify the prepare_messages_for_api function to just format messages without limits
----@param history ChatMessage[] The full chat history
----@return table[] messages Formatted messages for API
-local function prepare_messages_for_api(history)
-  local messages = {}
-
-  -- Convert messages to API format
-  for _, msg in ipairs(history) do
-    if msg.role ~= "system" then
-      table.insert(messages, {
-        role = msg.role,
-        content = msg.content
-      })
-    end
-  end
-
-  return messages
+-- Add helper function for adding next prompt (near other helper functions)
+local function add_next_prompt(bufnr)
+  local next_prompt = "user: "
+  vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", "", next_prompt })
+  
+  -- Move cursor to the end
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  vim.api.nvim_win_set_cursor(0, { line_count, #next_prompt })
 end
 
 -- Update send_to_anthropic to handle auth errors
@@ -306,14 +388,23 @@ function M.send_to_anthropic(message)
 
   -- Get conversation history and prepare messages
   local history = M.chat_history[bufnr] or {}
-  local messages = prepare_messages_for_api(history)
+  local messages = {}
+
+  -- Convert messages to API format
+  for _, msg in ipairs(history) do
+    if msg.role ~= "system" then
+      table.insert(messages, {
+        role = msg.role,
+        content = msg.content
+      })
+    end
+  end
 
   -- Add current message to messages array
   vim.list_extend(messages, message)
 
   -- Track the accumulated response
   local accumulated_text = ""
-  local message_number = message[1] and message[1].message_number
   local had_error = false
 
   -- Prepare request body
@@ -370,7 +461,7 @@ function M.send_to_anthropic(message)
         end
         -- Only process data if we haven't had an error
         if not had_error then
-          accumulated_text = handle_stream_chunk(chunk, bufnr, message_number, accumulated_text)
+          accumulated_text = handle_stream_chunk(chunk, bufnr, accumulated_text)
         end
       end
     end),
@@ -381,15 +472,7 @@ function M.send_to_anthropic(message)
       end
 
       if return_val == 0 and not had_error and vim.api.nvim_buf_is_valid(bufnr) then
-        -- Add two blank lines and next user prompt after completion
-        local next_prompt = string.format("user (%d): ", (message_number or 0) + 1)
-        vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", "", next_prompt })
-
-        -- Move cursor to the end
-        local line_count = vim.api.nvim_buf_line_count(bufnr)
-        vim.api.nvim_win_set_cursor(0, { line_count, #next_prompt })
-
-        -- Save chat after successful completion
+        add_next_prompt(bufnr)
         M.save_chat(bufnr)
       end
     end),
@@ -403,12 +486,10 @@ end
 
 -- Function to get the latest user message from buffer
 ---@return string content The latest user message
----@return number|nil message_number The message number
 local function get_latest_user_message()
   local bufnr = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local content = {}
-  local message_number = nil
   local separator_line = nil
 
   -- First, find the separator line (the dashed line)
@@ -420,85 +501,65 @@ local function get_latest_user_message()
   end
 
   if not separator_line then
-    return "", nil
+    return ""
   end
 
   -- Find the last user message by scanning backwards from the end
-  local in_message = false
-  local message_start = nil
+  local last_user_line = nil
 
+  -- Find the last user prompt line
   for i = #lines, separator_line, -1 do
     local line = lines[i]
-    local user_num = line:match("^user %((%d+)%):")
-
-    if user_num and not message_start then
-      message_start = i
-      message_number = tonumber(user_num)
-      in_message = true
-    elseif message_start and (line:match("^[^:]+:") or line:match("^%-%-%-")) then
-      -- Get all lines between message_start and this line
-      for j = i + 1, message_start do
-        local msg_line = lines[j]
-        if j == message_start then
-          msg_line = msg_line:match("^user %([%d]+%):%s*(.*)$") or ""
-        end
-        table.insert(content, msg_line)
-      end
-      break
-    elseif i == separator_line + 1 and message_start then
-      for j = i, message_start do
-        local msg_line = lines[j]
-        if j == message_start then
-          msg_line = msg_line:match("^user %([%d]+%):%s*(.*)$") or ""
-        end
-        table.insert(content, msg_line)
-      end
+    if line:match("^user:") then
+      last_user_line = i
       break
     end
   end
 
-  -- If we haven't found a message yet, look for content after the separator
-  if #content == 0 then
+  -- If we found a user line, collect its content
+  if last_user_line then
+    local message_start = last_user_line
+    local message_end = last_user_line
+
+    -- Find the end of this message (next prompt or EOF)
+    for i = last_user_line + 1, #lines do
+      local line = lines[i]
+      if line:match("^[^:]+:") then
+        message_end = i - 1
+        break
+      end
+      message_end = i
+    end
+
+    -- Collect the message content
+    for i = message_start, message_end do
+      local line = lines[i]
+      if i == message_start then
+        line = line:match("^user:%s*(.*)$") or ""
+      end
+      table.insert(content, line)
+    end
+  else
+    -- Handle initial message after separator
     local message_lines = {}
     local started_content = false
-    local has_content = false -- Add flag to track if we found any non-empty content
+    local has_content = false
 
     for i = separator_line + 1, #lines do
       local line = lines[i]
-
-      -- Skip only specific prompts
-      local is_user_prompt = line:match("^user %([%d]+%):%s*$") ~= nil
-      local is_system_prompt = line:match("^(system|assistant|user):%s*$") ~= nil
-
-      if not is_user_prompt and not is_system_prompt then
-        -- If we find a non-empty line, mark that we've started content
-        if line ~= "" then
-          started_content = true
-          has_content = true -- Set flag when we find non-empty content
-        end
-
-        -- Only add the line if we've started content
-        if started_content then
-          table.insert(message_lines, line)
-        end
+      if not line:match("^[^:]+:") and line ~= "" then
+        started_content = true
+        has_content = true
+        table.insert(message_lines, line)
       end
     end
 
-    -- Remove trailing empty lines
-    while #message_lines > 0 and message_lines[#message_lines] == "" do
-      table.remove(message_lines, #message_lines)
-    end
-
-    -- Only add to content if we found actual content
     if has_content then
-      for _, line in ipairs(message_lines) do
-        table.insert(content, line)
-      end
-      message_number = 1
+      content = message_lines
     end
   end
 
-  return table.concat(content, '\n'), message_number
+  return table.concat(content, '\n')
 end
 
 -- Helper function to create floating window
@@ -670,9 +731,18 @@ function M.get_system_role()
   return system_content
 end
 
--- Update send_message to set target buffer if not already set
+-- Update send_message to set the state before sending request
 function M.send_message()
   local bufnr = vim.api.nvim_get_current_buf()
+  
+  -- Check if already waiting for a response
+  if M.is_waiting_response[bufnr] then
+    return
+  end
+
+  -- Set waiting state at the start
+  M.is_waiting_response[bufnr] = true
+  
   local win = vim.api.nvim_get_current_win()
 
   -- Set target buffer if not already set
@@ -695,7 +765,7 @@ function M.send_message()
   end
 
   -- Get latest user message
-  local ok, content, message_number = pcall(get_latest_user_message)
+  local ok, content = pcall(get_latest_user_message)
   if not ok then
     vim.notify("Error getting user message: " .. tostring(content), vim.log.levels.ERROR)
     return
@@ -736,8 +806,7 @@ function M.send_message()
     content = full_content,
     id = M.generate_id(),
     opts = { visible = true },
-    role = "user",
-    message_number = message_number
+    role = "user"
   })
 
   -- Prepare message format for API
@@ -764,9 +833,10 @@ function M.send_message()
   -- Send to Anthropic asynchronously
   local job = M.send_to_anthropic(message)
 
-  -- If job is nil (API key not set), clean up thinking indicator
+  -- If job is nil (API key not set), clean up state
   if not job then
     stop_thinking()
+    M.is_waiting_response[bufnr] = nil
     -- Remove the blank lines we added
     local line_count = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, line_count - 2, line_count, false, {})
@@ -777,6 +847,7 @@ function M.send_message()
   job:after(function()
     vim.schedule(function()
       stop_thinking()
+      M.is_waiting_response[bufnr] = nil
     end)
   end)
 end
@@ -804,7 +875,6 @@ end
 
 -- Add the keymap in both open_chat and load_chat functions
 local function setup_buffer_mappings(bufnr)
-  -- Existing mappings...
   vim.api.nvim_buf_set_keymap(bufnr, 'n', '<CR>',
     [[<cmd>lua require('llmancer.chat').send_message()<CR>]],
     { noremap = true, silent = true })
@@ -813,7 +883,6 @@ local function setup_buffer_mappings(bufnr)
     [[<cmd>lua require('llmancer.chat').view_conversation()<CR>]],
     { noremap = true, silent = true })
 
-  -- Add new mapping for system prompt
   vim.api.nvim_buf_set_keymap(bufnr, 'n', 'gs',
     [[<cmd>lua require('llmancer.chat').show_system_prompt()<CR>]],
     { noremap = true, silent = true, desc = "Show system prompt" })
@@ -867,7 +936,7 @@ local function get_last_llm_response()
       -- Find the end of this response (next user prompt or EOF)
       end_line = #lines -- Default to end of buffer
       for j = i + 1, #lines do
-        if lines[j]:match("^user %(%d+%)") then
+        if lines[j]:match("^user:") then
           end_line = j - 1
           break
         end
@@ -969,10 +1038,19 @@ function M.load_chat(chat_id, target_bufnr)
     M.set_target_buffer(bufnr, target_bufnr)
   end
 
-  -- Move cursor to end of buffer
+  -- Move cursor to end of buffer after making sure we're in the right window
   vim.schedule(function()
-    local line_count = vim.api.nvim_buf_line_count(bufnr)
-    vim.api.nvim_win_set_cursor(0, { line_count, 0 })
+    if vim.api.nvim_buf_is_valid(bufnr) then
+      -- Get the window ID after the buffer is displayed
+      local win_id = vim.fn.bufwinid(bufnr)
+      if win_id ~= -1 then
+        local line_count = vim.api.nvim_buf_line_count(bufnr)
+        if line_count > 0 then
+          -- Set cursor to last line, first column
+          vim.api.nvim_win_set_cursor(win_id, { line_count, 0 })
+        end
+      end
+    end
   end)
 
   return bufnr
@@ -982,28 +1060,52 @@ end
 M.show_system_prompt = show_system_prompt
 M.setup_buffer_mappings = setup_buffer_mappings
 
--- Add cleanup_buffer to the module instead of keeping it local
+-- Update cleanup_buffer
 function M.cleanup_buffer(bufnr)
-  vim.notify(string.format("Cleaning up buffer %d", bufnr), vim.log.levels.DEBUG)
-
   -- Cancel any active job
   if M.active_jobs[bufnr] then
-    -- vim.notify(string.format("Cancelling active job for buffer %d", bufnr), vim.log.levels.DEBUG)
     M.active_jobs[bufnr]:shutdown()
     M.active_jobs[bufnr] = nil
   end
 
   -- Clean up chat history
   if M.chat_history[bufnr] then
-    -- vim.notify(string.format("Cleaning chat history for buffer %d", bufnr), vim.log.levels.DEBUG)
     M.chat_history[bufnr] = nil
   end
 
   -- Clean up target buffers
   if M.target_buffers[bufnr] then
-    -- vim.notify(string.format("Cleaning target buffer association for buffer %d", bufnr), vim.log.levels.DEBUG)
     M.target_buffers[bufnr] = nil
   end
+
+  -- Clean up waiting state
+  if M.is_waiting_response[bufnr] then
+    M.is_waiting_response[bufnr] = nil
+  end
 end
+
+-- Add this near the end of the file, with the other setup code
+local function setup_commands()
+  -- Command to toggle file in context
+  vim.api.nvim_create_user_command('LLMContext', function(opts)
+    require('llmancer.chat').toggle_file_in_context(opts.args)
+  end, {
+    nargs = 1,
+    complete = function(_, _, _)
+      local bufs = {}
+      for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+        local name = vim.api.nvim_buf_get_name(bufnr)
+        if name ~= "" then
+          table.insert(bufs, name)
+        end
+      end
+      return bufs
+    end,
+    desc = "Toggle a file in the chat context"
+  })
+end
+
+-- Add setup_commands() to the end of the file
+setup_commands()
 
 return M
