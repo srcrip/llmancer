@@ -5,6 +5,7 @@ local utils = require('llmancer.utils')
 local config = require('llmancer.config')
 local indicators = require('llmancer.indicators')
 local inline_edit = require('llmancer.inline_edit')
+local SECTION_SEPARATOR = "---"
 
 -- At the top with other helper functions, before M.setup
 local function save_chat_state(bufnr)
@@ -343,8 +344,28 @@ function M.open_chat(chat_id)
     local open_files = collect_open_files()
     local chat = require('llmancer.chat')
     
-    -- Create params text first
-    local params_text = chat.create_params_text()
+    -- Create params text with open files in context
+    local params = {
+      params = {
+        model = config.values.model,
+        max_tokens = config.values.max_tokens,
+        temperature = config.values.temperature,
+      },
+      context = {
+        files = open_files,  -- Add the open files to context
+        global = {}
+      }
+    }
+    
+    -- Convert params to string and split into lines
+    local params_text = {
+      SECTION_SEPARATOR,
+    }
+    -- Split the inspected params into lines and add them
+    for line in vim.inspect(params):gmatch("[^\r\n]+") do
+      table.insert(params_text, line)
+    end
+    table.insert(params_text, SECTION_SEPARATOR)
 
     -- Then add help text
     local help_text = {
