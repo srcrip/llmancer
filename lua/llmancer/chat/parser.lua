@@ -68,17 +68,6 @@ function M.parse_chat_lines(lines)
   return messages
 end
 
--- Helper function to handle message completion
-local function complete_message(current_msg, messages)
-  if current_msg then
-    current_msg.content = vim.trim(current_msg.content)
-    if current_msg.content ~= "" then
-      table.insert(messages, current_msg)
-    end
-  end
-  return nil
-end
-
 -- Parse the chat buffer into a sequence of messages
 ---@param bufnr number The buffer number to parse
 ---@return table[] messages Array of message objects {role, content}

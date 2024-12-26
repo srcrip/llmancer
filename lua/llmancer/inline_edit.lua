@@ -76,8 +76,8 @@ local function get_visual_selection()
     }
   elseif mode:match "[vV]" then
     -- Visual mode - get the current selection
-    local _, csrow, cscol, _ = unpack(vim.fn.getpos ".")
-    local _, cerow, cecol, _ = unpack(vim.fn.getpos "v")
+    local _, csrow, _, _ = unpack(vim.fn.getpos ".")
+    local _, cerow, _, _ = unpack(vim.fn.getpos "v")
 
     -- Normalize positions (make sure start comes before end)
     local start_line = math.min(csrow, cerow)

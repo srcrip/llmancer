@@ -3,7 +3,6 @@ local M = {}
 -- At the top of the file, add:
 local utils = require "llmancer.utils"
 local config = require "llmancer.config"
-local indicators = require "llmancer.indicators"
 local inline_edit = require "llmancer.inline_edit"
 local SECTION_SEPARATOR = "---"
 
@@ -16,47 +15,6 @@ local function save_chat_state(bufnr)
       win_id = vim.fn.win_getid(),
     }
   end
-end
-
--- Add with other helper functions
-local function move_cursor_to_end(bufnr)
-  vim.schedule(function()
-    if vim.api.nvim_buf_is_valid(bufnr) then
-      local line_count = vim.api.nvim_buf_line_count(bufnr)
-      vim.api.nvim_win_set_cursor(0, { line_count, 0 })
-    end
-  end)
-end
-
--- Helper functions
--- Open buffer in appropriate split
----@param bufnr number Buffer number to open
-local function open_buffer_split(bufnr)
-  utils.open_split()
-  vim.api.nvim_set_current_buf(bufnr)
-end
-
--- Get existing or create new chat buffer
----@param chat_name string Name for the chat buffer
----@return number bufnr Buffer number
-local function get_or_create_chat_buffer(chat_name)
-  -- Generate the full file path
-  local file_path = config.values.storage_dir .. "/" .. chat_name .. ".llmc"
-
-  -- Check if buffer already exists for this file
-  local existing_bufnr = vim.fn.bufnr(file_path)
-
-  if existing_bufnr ~= -1 then
-    open_buffer_split(existing_bufnr)
-    return existing_bufnr
-  end
-
-  -- Create new buffer with the full file path
-  local bufnr = vim.api.nvim_create_buf(true, false) -- Listed buffer, not scratch
-  vim.api.nvim_buf_set_name(bufnr, file_path)
-
-  open_buffer_split(bufnr)
-  return bufnr
 end
 
 -- Generate unique chat ID

@@ -15,18 +15,24 @@
 local M = {}
 
 local config = require "llmancer.config"
-local main = require "llmancer.main"
 local indicators = require "llmancer.indicators"
 local parser = require "llmancer.chat.parser"
-
--- Module state
 M.target_buffers = {} ---@type table<number, number>
 M.active_jobs = {} ---@type table<number, plenary.Job>
 M.is_waiting_response = {} ---@type table<number, boolean>
 
 -- Add these constants at the top of the file
 local SECTION_SEPARATOR = "---"
-local CHAT_SEPARATOR = "----------------------------------------"
+
+-- Add helper function for adding next prompt (near other helper functions)
+local function add_next_prompt(bufnr)
+  local next_prompt = "user: "
+  vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", "", next_prompt })
+
+  -- Move cursor to the end
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  vim.api.nvim_win_set_cursor(0, { line_count, #next_prompt })
+end
 
 -- At the top with other helper functions, after the constants
 -- Parse the chat buffer into a sequence of messages
@@ -62,7 +68,7 @@ local function load_buffer_context(bufnr)
   local in_params = false
   local params_lines = {}
 
-  for i, line in ipairs(lines) do
+  for _, line in ipairs(lines) do
     if line == SECTION_SEPARATOR then
       if not in_params then
         in_params = true
@@ -296,8 +302,8 @@ local function handle_stream_chunk(chunk, bufnr, accumulated_text)
     -- If this is the first chunk, add the model prefix and a newline
     if #accumulated_text == #new_text then
       -- Safely add new lines
-      local ok = pcall(vim.api.nvim_buf_set_lines, bufnr, -2, -1, false, { "" })
-      if not ok then
+      local new_ok = pcall(vim.api.nvim_buf_set_lines, bufnr, -2, -1, false, { "" })
+      if not new_ok then
         return
       end
 
@@ -344,16 +350,6 @@ function M.save_chat(bufnr)
   if success ~= 0 then
     vim.notify("Failed to save chat to " .. chat_name, vim.log.levels.ERROR)
   end
-end
-
--- Add helper function for adding next prompt (near other helper functions)
-local function add_next_prompt(bufnr)
-  local next_prompt = "user: "
-  vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "", "", next_prompt })
-
-  -- Move cursor to the end
-  local line_count = vim.api.nvim_buf_line_count(bufnr)
-  vim.api.nvim_win_set_cursor(0, { line_count, #next_prompt })
 end
 
 -- Update send_to_anthropic to add debug logging
@@ -649,7 +645,6 @@ end
 
 -- Update the build_system_prompt function to NOT include files
 function M.build_system_prompt()
-  local chat_bufnr = vim.api.nvim_get_current_buf()
   local system_context = M.get_system_role()
 
   -- No longer need to add files to system prompt
@@ -664,7 +659,6 @@ function M.set_target_buffer(chat_bufnr, target_bufnr)
 
   if target_bufnr ~= -1 and vim.api.nvim_buf_is_valid(target_bufnr) then
     M.target_buffers[chat_bufnr] = target_bufnr
-  else
   end
 end
 
@@ -677,7 +671,6 @@ function M.get_system_role()
   if vim.fn.filereadable(system_prompt_path) == 1 then
     local system_prompt_lines = vim.fn.readfile(system_prompt_path)
     system_content = table.concat(system_prompt_lines, "\n")
-  else
   end
 
   return system_content

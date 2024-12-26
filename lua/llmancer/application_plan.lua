@@ -423,7 +423,6 @@ function M.create_plan(code_blocks, target_buffers)
   local bufnr = create_plan_buffer "Generating plan..."
 
   -- Start thinking indicator
-  local main = require "llmancer.main"
   local stop_thinking = indicators.create_thinking_indicator(bufnr)
 
   -- Prepare buffer context
