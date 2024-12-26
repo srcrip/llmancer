@@ -2,11 +2,7 @@
 
 test:
 	@echo "Running tests..."
-	timeout 300 nvim -e \
-		--headless \
-		--noplugin \
-		-u specs/spec.lua \
-		-c "PlenaryBustedDirectory specs/features {minimal_init = 'specs/spec.lua'}"
+	nvim --headless -c "PlenaryBustedDirectory tests/llmancer/ {minimal_init = 'tests/minimal_init.lua'}"
 
 lint:
 	luacheck .
