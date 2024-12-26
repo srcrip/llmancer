@@ -566,91 +566,81 @@ function M.send_to_anthropic(message)
   return job
 end
 
--- Function to get the latest user message from buffer
----@return string content The latest user message
+-- Get the latest user message from the chat buffer
+---@return string content The content of the latest user message
 local function get_latest_user_message()
   local bufnr = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  local content = {}
-  local separator_line = nil
+  local message_lines = {}
 
-  -- First, find the separator line (the dashed line)
-  for i, line in ipairs(lines) do
-    if line == CHAT_SEPARATOR then
-      separator_line = i
+  -- First find the last non-empty line
+  local last_line = nil
+  for i = #lines, 1, -1 do
+    if vim.trim(lines[i]) ~= "" then
+      last_line = i
       break
     end
   end
 
-  if not separator_line then
+  if not last_line then
     return ""
   end
 
-  -- Find the last user message by scanning backwards from the end
-  local last_user_line = nil
-
-  -- Find the last user prompt line
-  for i = #lines, separator_line, -1 do
+  -- Now find the start of this message by looking for separator or role marker
+  local start_line = nil
+  local user_prefix = nil
+  for i = last_line, 1, -1 do
     local line = lines[i]
-    if line:match("^user:") then
-      last_user_line = i
+
+    if line:match("^A:") or line:match("^assistant:") then
+      -- Skip back to previous user message or separator
+      while i > 1 do
+        i = i - 1
+        if lines[i]:match("^user:") then
+          start_line = i
+          user_prefix = true
+          break
+        elseif lines[i] == CHAT_SEPARATOR then
+          start_line = i + 1
+          break
+        end
+      end
+      break
+    elseif line:match("^user:") then
+      start_line = i
+      user_prefix = true
+      break
+    elseif line == CHAT_SEPARATOR then
+      start_line = i + 1
       break
     end
   end
 
-  -- If we found a user line, collect its content
-  if last_user_line then
-    local message_start = last_user_line
-    local message_end = last_user_line
+  if not start_line then
+    return ""
+  end
 
-    -- Find the end of this message (next prompt or EOF)
-    for i = last_user_line + 1, #lines do
-      local line = lines[i]
-      if line:match("^[^:]+:") then
-        message_end = i - 1
-        break
-      end
-      message_end = i
-    end
-
-    -- Collect the message content
-    for i = message_start, message_end do
-      local line = lines[i]
-      if i == message_start then
-        line = line:match("^user:%s*(.*)$") or ""
-      end
-      table.insert(content, line)
-    end
-  else
-    -- If no user message found, get content after separator
-    local message_lines = {}
-    local found_content = false
-
-    for i = separator_line + 1, #lines do
-      local line = vim.trim(lines[i])
-      -- Skip empty lines and role markers at the start
-      if not found_content then
-        if line ~= "" and not line:match("^[^:]+:") then
-          found_content = true
-          table.insert(message_lines, line)
-        end
-      else
-        -- Stop at next role marker
-        if line:match("^[^:]+:") then
-          break
-        end
-        if line ~= "" then
-          table.insert(message_lines, line)
-        end
-      end
-    end
-
-    if #message_lines > 0 then
-      return table.concat(message_lines, '\n')
+  -- Find end of message (next assistant response or EOF)
+  local end_line = last_line
+  for i = start_line, last_line do
+    local line = lines[i]
+    if line:match("^A:") or line:match("^assistant:") then
+      end_line = i - 1
+      break
     end
   end
 
-  return table.concat(content, '\n')
+  -- Collect all lines from start to end
+  for i = start_line, end_line do
+    local line = lines[i]
+    -- If this is the first line and it has a user prefix, remove it
+    if i == start_line and user_prefix then
+      line = line:gsub("^user:%s*", "")
+    end
+    table.insert(message_lines, line)
+  end
+
+  return table.concat(message_lines, "\n")
 end
 
 -- Helper function to create floating window
