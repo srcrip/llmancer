@@ -9,7 +9,7 @@ local M = {}
 local valid_roles = {
   user = true,
   assistant = true,
-  system = true
+  system = true,
 }
 
 -- Parse the chat buffer into a sequence of messages
@@ -21,55 +21,43 @@ function M.parse_chat_lines(lines)
   local in_params = false
   local found_separator = false
 
-  for i, line in ipairs(lines) do
-    -- Skip parameter section
+  for _, line in ipairs(lines) do
+    -- Handle parameters section
     if line == SECTION_SEPARATOR then
       in_params = not in_params
-      goto continue
-    end
-    if in_params then
-      goto continue
-    end
-
-    -- When we hit the separator, start collecting the first message
-    if line == CHAT_SEPARATOR then
-      found_separator = true
-      goto continue
-    end
-
-    -- After separator, collect first message until we hit a role marker
-    if found_separator and not current_msg then
-      local trimmed = vim.trim(line)
-      if trimmed ~= "" and not trimmed:match("^[^:]+:") then
-        current_msg = {
-          role = "user",
-          content = trimmed
-        }
-        goto continue
-      end
-    end
-
-    -- Check for message start
-    local role = line:match("^(%w+):%s*")
-    if role and valid_roles[role] then
-      if current_msg then
-        current_msg.content = vim.trim(current_msg.content)
-        if current_msg.content ~= "" then
-          table.insert(messages, current_msg)
+    elseif not in_params then
+      -- Process chat content
+      if line == CHAT_SEPARATOR then
+        found_separator = true
+      elseif found_separator and not current_msg then
+        local trimmed = vim.trim(line)
+        if trimmed ~= "" and not trimmed:match "^[^:]+:" then
+          current_msg = {
+            role = "user",
+            content = trimmed,
+          }
+        end
+      else
+        local role = line:match "^(%w+):%s*"
+        if role and valid_roles[role] then
+          if current_msg then
+            current_msg.content = vim.trim(current_msg.content)
+            if current_msg.content ~= "" then
+              table.insert(messages, current_msg)
+            end
+          end
+          current_msg = {
+            role = role,
+            content = line:sub(#role + 2),
+          }
+        elseif current_msg then
+          current_msg.content = current_msg.content .. "\n" .. line
         end
       end
-
-      current_msg = {
-        role = role,
-        content = line:sub(#role + 2)
-      }
-    elseif current_msg then
-      current_msg.content = current_msg.content .. "\n" .. line
     end
-
-    ::continue::
   end
 
+  -- Handle the last message
   if current_msg then
     current_msg.content = vim.trim(current_msg.content)
     if current_msg.content ~= "" then
@@ -78,6 +66,17 @@ function M.parse_chat_lines(lines)
   end
 
   return messages
+end
+
+-- Helper function to handle message completion
+local function complete_message(current_msg, messages)
+  if current_msg then
+    current_msg.content = vim.trim(current_msg.content)
+    if current_msg.content ~= "" then
+      table.insert(messages, current_msg)
+    end
+  end
+  return nil
 end
 
 -- Parse the chat buffer into a sequence of messages
@@ -114,11 +113,11 @@ function M.get_latest_user_message(bufnr)
   for i = last_line, 1, -1 do
     local line = lines[i]
 
-    if line:match("^A:") or line:match("^assistant:") then
+    if line:match "^A:" or line:match "^assistant:" then
       -- Skip back to previous user message or separator
       while i > 1 do
         i = i - 1
-        if lines[i]:match("^user:") then
+        if lines[i]:match "^user:" then
           start_line = i
           user_prefix = true
           break
@@ -128,7 +127,7 @@ function M.get_latest_user_message(bufnr)
         end
       end
       break
-    elseif line:match("^user:") then
+    elseif line:match "^user:" then
       start_line = i
       user_prefix = true
       break
@@ -146,7 +145,7 @@ function M.get_latest_user_message(bufnr)
   local end_line = last_line
   for i = start_line, last_line do
     local line = lines[i]
-    if line:match("^A:") or line:match("^assistant:") then
+    if line:match "^A:" or line:match "^assistant:" then
       end_line = i - 1
       break
     end
@@ -170,4 +169,4 @@ function M.get_latest_user_message(bufnr)
   return table.concat(message_lines, "\n")
 end
 
-return M 
+return M

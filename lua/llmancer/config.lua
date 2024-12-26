@@ -17,14 +17,14 @@ local M = {}
 -- Default configuration
 ---@type Config
 local defaults = {
-  open_mode = 'vsplit',
-  buffer_name = 'LLMancer.nvim',
-  anthropic_api_key = os.getenv("ANTHROPIC_API_KEY"),
+  open_mode = "vsplit",
+  buffer_name = "LLMancer.nvim",
+  anthropic_api_key = os.getenv "ANTHROPIC_API_KEY",
   model = "claude-3-sonnet-20240229",
   max_tokens = 4096,
   temperature = 0.7,
   system_prompt = nil,
-  storage_dir = vim.fn.stdpath("data") .. "/llmancer/chats",
+  storage_dir = vim.fn.stdpath "data" .. "/llmancer/chats",
   close_chat_buffer_on_win_closed = true,
   actions = {
     keymap = "<leader>a",
@@ -42,10 +42,10 @@ M.values = vim.deepcopy(defaults)
 local function validate_config(config)
   -- Required fields
   local required = {
-    'anthropic_api_key',
-    'model',
-    'max_tokens',
-    'storage_dir'
+    "anthropic_api_key",
+    "model",
+    "max_tokens",
+    "storage_dir",
   }
 
   for _, key in ipairs(required) do
@@ -55,7 +55,7 @@ local function validate_config(config)
   end
 
   -- Validate open_mode
-  if config.open_mode and not vim.tbl_contains({ 'vsplit', 'split', 'enew' }, config.open_mode) then
+  if config.open_mode and not vim.tbl_contains({ "vsplit", "split", "enew" }, config.open_mode) then
     return string.format("Invalid open_mode: %s (must be 'vsplit', 'split', or 'enew')", config.open_mode)
   end
 
@@ -69,10 +69,14 @@ local function validate_config(config)
   end
 
   -- Validate add_files_to_new_chat
-  if config.add_files_to_new_chat and 
-     not vim.tbl_contains({ 'all', 'current', 'none' }, config.add_files_to_new_chat) then
-    return string.format("Invalid add_files_to_new_chat: %s (must be 'all', 'current', or 'none')", 
-      config.add_files_to_new_chat)
+  if
+    config.add_files_to_new_chat
+    and not vim.tbl_contains({ "all", "current", "none" }, config.add_files_to_new_chat)
+  then
+    return string.format(
+      "Invalid add_files_to_new_chat: %s (must be 'all', 'current', or 'none')",
+      config.add_files_to_new_chat
+    )
   end
 
   return nil

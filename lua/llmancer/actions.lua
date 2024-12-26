@@ -5,23 +5,27 @@ local function find_code_block_boundaries(cursor_line, lines)
   local start_line = cursor_line
   local end_line = cursor_line
 
-  while start_line > 1 and not lines[start_line - 1]:match("^```") do
+  while start_line > 1 and not lines[start_line - 1]:match "^```" do
     start_line = start_line - 1
   end
 
-  while end_line < #lines and not lines[end_line + 1]:match("^```") do
+  while end_line < #lines and not lines[end_line + 1]:match "^```" do
     end_line = end_line + 1
   end
 
-  if start_line >= 1 and end_line <= #lines and
-      lines[start_line - 1]:match("^```") and lines[end_line + 1]:match("^```") then
+  if
+    start_line >= 1
+    and end_line <= #lines
+    and lines[start_line - 1]:match "^```"
+    and lines[end_line + 1]:match "^```"
+  then
     return start_line, end_line
   end
   return nil, nil
 end
 
 local function extract_code_block(lines, start_line, end_line)
-  local lang = lines[start_line - 1]:match("^```(.+)$")
+  local lang = lines[start_line - 1]:match "^```(.+)$"
   local block = table.concat(vim.list_slice(lines, start_line, end_line), "\n")
   return block, lang
 end
@@ -41,8 +45,7 @@ end
 -- Helper functions for buffer handling
 local function get_valid_buffers()
   return vim.tbl_filter(function(bufnr)
-    return vim.api.nvim_buf_is_loaded(bufnr)
-        and vim.bo[bufnr].buftype == ""
+    return vim.api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].buftype == ""
   end, vim.api.nvim_list_bufs())
 end
 
@@ -51,41 +54,33 @@ local function format_buffer_items(bufs)
     local name = vim.api.nvim_buf_get_name(bufnr)
     return {
       bufnr = bufnr,
-      display = string.format("%d: %s", bufnr, name ~= "" and name or "[No Name]")
+      display = string.format("%d: %s", bufnr, name ~= "" and name or "[No Name]"),
     }
   end, bufs)
 end
 
 local function show_buffer_selection(items, code_block)
-  vim.ui.select(
-    items,
-    {
-      prompt = "Select target buffer:",
-      format_item = function(item) return item.display end
-    },
-    function(choice)
-      if choice then
-        require('llmancer.application_plan').create_plan(
-          { code_block },
-          { choice.bufnr }
-        )
-      end
+  vim.ui.select(items, {
+    prompt = "Select target buffer:",
+    format_item = function(item)
+      return item.display
+    end,
+  }, function(choice)
+    if choice then
+      require("llmancer.application_plan").create_plan({ code_block }, { choice.bufnr })
     end
-  )
+  end)
 end
 
 -- Action definitions
 local function apply_to_alternate_buffer(code_block)
-  local alt_bufnr = vim.fn.bufnr("#")
+  local alt_bufnr = vim.fn.bufnr "#"
   if alt_bufnr == -1 then
     vim.notify("No alternate buffer available", vim.log.levels.ERROR)
     return
   end
 
-  require('llmancer.application_plan').create_plan(
-    { code_block },
-    { alt_bufnr }
-  )
+  require("llmancer.application_plan").create_plan({ code_block }, { alt_bufnr })
 end
 
 local function apply_to_selected_buffer(code_block)
@@ -99,13 +94,13 @@ local actions = {
   {
     name = "Apply to Alternate Buffer",
     description = "Apply code to the alternate buffer (#)",
-    callback = apply_to_alternate_buffer
+    callback = apply_to_alternate_buffer,
   },
   {
     name = "Apply to Selected Buffer",
     description = "Apply code to a selected buffer",
-    callback = apply_to_selected_buffer
-  }
+    callback = apply_to_selected_buffer,
+  },
 }
 
 local function format_action_items(items)
@@ -114,24 +109,22 @@ local function format_action_items(items)
       name = action.name,
       description = action.description,
       callback = action.callback,
-      display = string.format("%s - %s", action.name, action.description)
+      display = string.format("%s - %s", action.name, action.description),
     }
   end, items)
 end
 
 local function show_action_selection(action_items, code_block)
-  vim.ui.select(
-    action_items,
-    {
-      prompt = "Select action:",
-      format_item = function(item) return item.display end
-    },
-    function(choice)
-      if choice then
-        choice.callback(code_block)
-      end
+  vim.ui.select(action_items, {
+    prompt = "Select action:",
+    format_item = function(item)
+      return item.display
+    end,
+  }, function(choice)
+    if choice then
+      choice.callback(code_block)
     end
-  )
+  end)
 end
 
 -- Show actions picker

@@ -11,9 +11,8 @@ vim.api.nvim_create_autocmd({ "BufRead", "BufNewFile" }, {
 })
 
 -- Also register with the filetype system
-vim.filetype.add({
+vim.filetype.add {
   extension = {
-    llmc = "llmancer"
+    llmc = "llmancer",
   },
-})
-
+}

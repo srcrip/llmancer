@@ -1,5 +1,5 @@
-local curl = require('plenary.curl')
-local config = require('llmancer.config')
+local curl = require "plenary.curl"
+local config = require "llmancer.config"
 
 local M = {}
 
@@ -27,11 +27,11 @@ function M.send_message(messages, system_prompt, callback)
   }
 
   -- Make the request
-  curl.post('https://api.anthropic.com/v1/messages', {
+  curl.post("https://api.anthropic.com/v1/messages", {
     headers = {
-      ['x-api-key'] = config.values.anthropic_api_key,
-      ['anthropic-version'] = '2023-06-01',
-      ['content-type'] = 'application/json',
+      ["x-api-key"] = config.values.anthropic_api_key,
+      ["anthropic-version"] = "2023-06-01",
+      ["content-type"] = "application/json",
     },
     body = vim.json.encode(request_body),
     callback = vim.schedule_wrap(function(response)
@@ -51,4 +51,4 @@ function M.send_message(messages, system_prompt, callback)
   })
 end
 
-return M 
+return M

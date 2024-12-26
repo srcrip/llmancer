@@ -14,10 +14,10 @@
 ---@type table<number, boolean> Map of buffer numbers to response waiting state
 local M = {}
 
-local config = require('llmancer.config')
-local main = require('llmancer.main')
-local indicators = require('llmancer.indicators')
-local parser = require('llmancer.chat.parser')
+local config = require "llmancer.config"
+local main = require "llmancer.main"
+local indicators = require "llmancer.indicators"
+local parser = require "llmancer.chat.parser"
 
 -- Module state
 M.target_buffers = {} ---@type table<number, number>
@@ -114,7 +114,7 @@ local function write_buffer_context(bufnr, context)
 
   -- Convert context to lines
   local context_str = vim.inspect(context)
-  local context_lines = vim.split(context_str, '\n')
+  local context_lines = vim.split(context_str, "\n")
 
   -- Build new lines array
   local new_lines = {}
@@ -201,17 +201,18 @@ local function get_buffer_config(bufnr)
       },
       context = {
         files = {},
-        global = {}
-      }
+        global = {},
+      },
     }
   end
 
   -- Ensure required fields exist
-  context.params = context.params or {
-    model = config.values.model,
-    max_tokens = config.values.max_tokens,
-    temperature = config.values.temperature,
-  }
+  context.params = context.params
+    or {
+      model = config.values.model,
+      max_tokens = config.values.max_tokens,
+      temperature = config.values.temperature,
+    }
   context.context = context.context or { files = {}, global = {} }
 
   return context
@@ -222,13 +223,12 @@ end
 ---@param new_text string The text to append
 local function append_to_buffer_streaming(bufnr, new_text)
   -- Check if buffer is still valid and modifiable
-  if not vim.api.nvim_buf_is_valid(bufnr) or
-      not vim.api.nvim_buf_get_option(bufnr, 'modifiable') then
+  if not vim.api.nvim_buf_is_valid(bufnr) or not vim.api.nvim_buf_get_option(bufnr, "modifiable") then
     return false
   end
 
   local last_line_idx = vim.api.nvim_buf_line_count(bufnr) - 1
-  
+
   -- Additional validation before getting last line
   if last_line_idx < 0 then
     return false
@@ -245,16 +245,14 @@ local function append_to_buffer_streaming(bufnr, new_text)
   local lines = vim.split(new_text, "\n", { plain = true })
 
   -- Safely update the last line
-  ok = pcall(vim.api.nvim_buf_set_lines, bufnr, last_line_idx, last_line_idx + 1, false,
-    { last_line .. lines[1] })
+  ok = pcall(vim.api.nvim_buf_set_lines, bufnr, last_line_idx, last_line_idx + 1, false, { last_line .. lines[1] })
   if not ok then
     return false
   end
 
   -- Add any additional lines
   if #lines > 1 then
-    ok = pcall(vim.api.nvim_buf_set_lines, bufnr, last_line_idx + 1, last_line_idx + 1, false,
-      vim.list_slice(lines, 2))
+    ok = pcall(vim.api.nvim_buf_set_lines, bufnr, last_line_idx + 1, last_line_idx + 1, false, vim.list_slice(lines, 2))
     if not ok then
       return false
     end
@@ -271,8 +269,10 @@ end
 ---@return string accumulated_text The updated accumulated text
 local function handle_stream_chunk(chunk, bufnr, accumulated_text)
   -- Look for data: lines
-  local data = chunk:match("^data: (.+)")
-  if not data then return accumulated_text end
+  local data = chunk:match "^data: (.+)"
+  if not data then
+    return accumulated_text
+  end
 
   local ok, content_delta = pcall(vim.fn.json_decode, data)
   if not ok or not content_delta or not content_delta.delta or not content_delta.delta.text then
@@ -297,8 +297,10 @@ local function handle_stream_chunk(chunk, bufnr, accumulated_text)
     if #accumulated_text == #new_text then
       -- Safely add new lines
       local ok = pcall(vim.api.nvim_buf_set_lines, bufnr, -2, -1, false, { "" })
-      if not ok then return end
-      
+      if not ok then
+        return
+      end
+
       local prefix = "assistant:"
       if new_text:sub(1, 3) == "```" then
         prefix = prefix .. "\n\n"
@@ -365,7 +367,7 @@ function M.send_to_anthropic(message)
     return nil
   end
 
-  local Job = require('plenary.job')
+  local Job = require "plenary.job"
   local bufnr = vim.api.nvim_get_current_buf()
   local config_table = get_buffer_config(bufnr)
   local params = config_table.params
@@ -408,52 +410,55 @@ function M.send_to_anthropic(message)
   local had_error = false
 
   -- Prepare request body
-  local body = vim.fn.json_encode({
+  local body = vim.fn.json_encode {
     model = params.model,
     max_tokens = params.max_tokens,
     temperature = params.temperature,
     messages = messages,
     system = system,
     stream = true,
-  })
+  }
 
   local debug = false
   if debug then
     local module_path = debug.getinfo(1).source:sub(2)
-    local base_dir = vim.fn.fnamemodify(module_path, ':h:h:h')
-    local debug_file = base_dir .. '/debug_log.txt'
+    local base_dir = vim.fn.fnamemodify(module_path, ":h:h:h")
+    local debug_file = base_dir .. "/debug_log.txt"
 
     local f = io.open(debug_file, "a")
     if f then
-      f:write(string.format("\n\n=== Request %s ===\n%s\n", os.date("%Y-%m-%d %H:%M:%S"), body))
+      f:write(string.format("\n\n=== Request %s ===\n%s\n", os.date "%Y-%m-%d %H:%M:%S", body))
       f:close()
     end
   end
 
-  local job = Job:new({
-    command = 'curl',
+  local job = Job:new {
+    command = "curl",
     args = {
-      'https://api.anthropic.com/v1/messages',
-      '-X', 'POST',
-      '-H', 'x-api-key: ' .. config.values.anthropic_api_key,
-      '-H', 'anthropic-version: 2023-06-01',
-      '-H', 'content-type: application/json',
-      '-H', 'accept: text/event-stream',
-      '-d', body,
-      '--no-buffer',
-      '-i', -- Include response headers
+      "https://api.anthropic.com/v1/messages",
+      "-X",
+      "POST",
+      "-H",
+      "x-api-key: " .. config.values.anthropic_api_key,
+      "-H",
+      "anthropic-version: 2023-06-01",
+      "-H",
+      "content-type: application/json",
+      "-H",
+      "accept: text/event-stream",
+      "-d",
+      body,
+      "--no-buffer",
+      "-i", -- Include response headers
     },
     on_stdout = vim.schedule_wrap(function(_, chunk)
       if chunk then
         -- Check for HTTP status line
-        local status = chunk:match("^HTTP/[%d.]+ (%d+)")
+        local status = chunk:match "^HTTP/[%d.]+ (%d+)"
         if status then
           if status == "401" then
             had_error = true
-            vim.notify(
-              "Authentication failed. Please check your Anthropic API key.",
-              vim.log.levels.ERROR
-            )
+            vim.notify("Authentication failed. Please check your Anthropic API key.", vim.log.levels.ERROR)
             if M.active_jobs[bufnr] then
               M.active_jobs[bufnr]:shutdown()
               M.active_jobs[bufnr] = nil
@@ -462,10 +467,7 @@ function M.send_to_anthropic(message)
           elseif status ~= "200" then
             had_error = true
             -- Log the full response for debugging
-            vim.notify(
-              "API request failed with status " .. status .. "\nResponse: " .. chunk,
-              vim.log.levels.ERROR
-            )
+            vim.notify("API request failed with status " .. status .. "\nResponse: " .. chunk, vim.log.levels.ERROR)
             if M.active_jobs[bufnr] then
               M.active_jobs[bufnr]:shutdown()
               M.active_jobs[bufnr] = nil
@@ -490,7 +492,7 @@ function M.send_to_anthropic(message)
         M.save_chat(bufnr)
       end
     end),
-  })
+  }
 
   -- Store the job
   M.active_jobs[bufnr] = job
@@ -508,8 +510,8 @@ end
 -- Helper function to create floating window
 local function create_floating_window(title)
   -- Get editor dimensions
-  local width = vim.api.nvim_get_option("columns")
-  local height = vim.api.nvim_get_option("lines")
+  local width = vim.api.nvim_get_option "columns"
+  local height = vim.api.nvim_get_option "lines"
 
   -- Calculate floating window size (80% of editor size)
   local win_height = math.ceil(height * 0.8)
@@ -521,15 +523,15 @@ local function create_floating_window(title)
 
   -- Set window options
   local opts = {
-    relative = 'editor',
+    relative = "editor",
     row = row,
     col = col,
     width = win_width,
     height = win_height,
-    style = 'minimal',
-    border = 'rounded',
+    style = "minimal",
+    border = "rounded",
     title = title,
-    title_pos = 'center',
+    title_pos = "center",
   }
 
   return opts
@@ -538,18 +540,26 @@ end
 -- Helper function to setup floating buffer
 local function setup_floating_buffer(bufnr, filetype)
   -- Set buffer options
-  vim.bo[bufnr].buftype = 'nofile'
-  vim.bo[bufnr].bufhidden = 'wipe'
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].bufhidden = "wipe"
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].filetype = filetype
 
   -- Add keymaps to close window
-  vim.api.nvim_buf_set_keymap(bufnr, 'n', 'q',
+  vim.api.nvim_buf_set_keymap(
+    bufnr,
+    "n",
+    "q",
     [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]],
-    { noremap = true, silent = true })
-  vim.api.nvim_buf_set_keymap(bufnr, 'n', '<Esc>',
+    { noremap = true, silent = true }
+  )
+  vim.api.nvim_buf_set_keymap(
+    bufnr,
+    "n",
+    "<Esc>",
     [[<cmd>lua vim.api.nvim_win_close(0, true)<CR>]],
-    { noremap = true, silent = true })
+    { noremap = true, silent = true }
+  )
 
   -- Add autocmd to properly clean up buffer when window is closed
   vim.api.nvim_create_autocmd("WinClosed", {
@@ -571,14 +581,14 @@ function M.view_conversation()
   local source_bufnr = vim.api.nvim_get_current_buf()
 
   local bufnr = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_buf_set_name(bufnr, 'LLMancer-History')
+  vim.api.nvim_buf_set_name(bufnr, "LLMancer-History")
 
   -- Create and open floating window with title
-  local win_opts = create_floating_window(" Chat History ")
+  local win_opts = create_floating_window " Chat History "
   vim.api.nvim_open_win(bufnr, true, win_opts)
 
   -- Setup buffer options and mappings
-  setup_floating_buffer(bufnr, 'json')
+  setup_floating_buffer(bufnr, "json")
 
   -- Parse chat history from buffer
   local messages = parse_chat_buffer(source_bufnr)
@@ -586,11 +596,15 @@ function M.view_conversation()
   -- Convert history to string
   local content = vim.fn.json_encode(messages)
   -- Pretty print the JSON with fallback if jq is not available
-  local jq_result = vim.fn.system('which jq >/dev/null 2>&1 && echo ' ..
-    vim.fn.shellescape(content) .. ' | jq . || echo ' .. vim.fn.shellescape(content))
+  local jq_result = vim.fn.system(
+    "which jq >/dev/null 2>&1 && echo "
+      .. vim.fn.shellescape(content)
+      .. " | jq . || echo "
+      .. vim.fn.shellescape(content)
+  )
 
   -- Set content
-  local lines = vim.split(jq_result, '\n')
+  local lines = vim.split(jq_result, "\n")
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 end
 
@@ -606,13 +620,13 @@ function M.create_params_text()
     },
     context = {
       files = {},
-      global = {}
-    }
+      global = {},
+    },
   }
 
   -- Only add current file if in "current" mode
   if config.values.add_files_to_new_chat == "current" then
-    local target_bufnr = vim.fn.bufnr('#')
+    local target_bufnr = vim.fn.bufnr "#"
     if target_bufnr ~= -1 and target_bufnr ~= chat_bufnr then
       local filename = vim.api.nvim_buf_get_name(target_bufnr)
       if filename ~= "" then
@@ -623,7 +637,7 @@ function M.create_params_text()
 
   -- Convert the table to a string and split it into lines
   local params_str = vim.inspect(params_table)
-  local params_lines = vim.split(params_str, '\n')
+  local params_lines = vim.split(params_str, "\n")
 
   -- Return array with separator lines and params lines
   local result = { "---" }
@@ -646,7 +660,7 @@ end
 ---@param chat_bufnr number The chat buffer number
 ---@param target_bufnr number|nil The target buffer number (defaults to alternate buffer)
 function M.set_target_buffer(chat_bufnr, target_bufnr)
-  target_bufnr = target_bufnr or vim.fn.bufnr('#')
+  target_bufnr = target_bufnr or vim.fn.bufnr "#"
 
   if target_bufnr ~= -1 and vim.api.nvim_buf_is_valid(target_bufnr) then
     M.target_buffers[chat_bufnr] = target_bufnr
@@ -656,13 +670,13 @@ end
 
 function M.get_system_role()
   local module_path = debug.getinfo(1).source:sub(2) -- Remove @ from start
-  local base_dir = vim.fn.fnamemodify(module_path, ':h:h:h')
-  local system_prompt_path = base_dir .. '/prompts/system.xml'
+  local base_dir = vim.fn.fnamemodify(module_path, ":h:h:h")
+  local system_prompt_path = base_dir .. "/prompts/system.xml"
   local system_content = nil
 
   if vim.fn.filereadable(system_prompt_path) == 1 then
     local system_prompt_lines = vim.fn.readfile(system_prompt_path)
-    system_content = table.concat(system_prompt_lines, '\n')
+    system_content = table.concat(system_prompt_lines, "\n")
   else
   end
 
@@ -707,14 +721,19 @@ function M.send_message()
   if params and params.context and params.context.files then
     for _, file in ipairs(params.context.files) do
       if type(file) == "string" and vim.fn.filereadable(file) == 1 then
-        local file_content = table.concat(vim.fn.readfile(file), '\n')
-        context_content = context_content .. string.format([[
+        local file_content = table.concat(vim.fn.readfile(file), "\n")
+        context_content = context_content
+          .. string.format(
+            [[
 
 <open_file>
 ```:%s
 %s
 ```
-</open_file>]], file, file_content)
+</open_file>]],
+            file,
+            file_content
+          )
       end
     end
   end
@@ -730,8 +749,8 @@ function M.send_message()
   local message = {
     {
       role = "user",
-      content = full_content
-    }
+      content = full_content,
+    },
   }
 
   -- Add blank lines before sending request to position the thinking indicator
@@ -740,7 +759,7 @@ function M.send_message()
   -- Auto-scroll to bottom
   vim.schedule(function()
     vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(bufnr), 0 })
-    vim.cmd('normal! zz')
+    vim.cmd "normal! zz"
   end)
 
   -- Start thinking animation
@@ -771,56 +790,72 @@ end
 -- Function to show system prompt in new buffer
 local function show_system_prompt()
   local bufnr = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_buf_set_name(bufnr, 'LLMancer-SystemPrompt')
+  vim.api.nvim_buf_set_name(bufnr, "LLMancer-SystemPrompt")
 
   -- Create and open floating window with title
-  local win_opts = create_floating_window(" System Prompt ")
+  local win_opts = create_floating_window " System Prompt "
 
   vim.api.nvim_open_win(bufnr, true, win_opts)
 
   -- Setup buffer options and mappings
-  setup_floating_buffer(bufnr, 'markdown')
+  setup_floating_buffer(bufnr, "markdown")
 
   -- Get system prompt
   local system_prompt = M.build_system_prompt()
 
   -- Set content
-  local lines = vim.split(system_prompt, '\n')
+  local lines = vim.split(system_prompt, "\n")
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 end
 
 -- Add the keymap in both open_chat and load_chat functions
 local function setup_buffer_mappings(bufnr)
-  vim.api.nvim_buf_set_keymap(bufnr, 'n', '<CR>',
+  vim.api.nvim_buf_set_keymap(
+    bufnr,
+    "n",
+    "<CR>",
     [[<cmd>lua require('llmancer.chat').send_message()<CR>]],
-    { noremap = true, silent = true })
+    { noremap = true, silent = true }
+  )
 
-  vim.api.nvim_buf_set_keymap(bufnr, 'n', 'gd',
+  vim.api.nvim_buf_set_keymap(
+    bufnr,
+    "n",
+    "gd",
     [[<cmd>lua require('llmancer.chat').view_conversation()<CR>]],
-    { noremap = true, silent = true })
+    { noremap = true, silent = true }
+  )
 
-  vim.api.nvim_buf_set_keymap(bufnr, 'n', 'gs',
+  vim.api.nvim_buf_set_keymap(
+    bufnr,
+    "n",
+    "gs",
     [[<cmd>lua require('llmancer.chat').show_system_prompt()<CR>]],
-    { noremap = true, silent = true, desc = "Show system prompt" })
+    { noremap = true, silent = true, desc = "Show system prompt" }
+  )
 
-  vim.api.nvim_buf_set_keymap(bufnr, 'n', 'ga',
+  vim.api.nvim_buf_set_keymap(
+    bufnr,
+    "n",
+    "ga",
     [[<cmd>lua require('llmancer.chat').create_plan_from_last_response()<CR>]],
-    { noremap = true, silent = true, desc = "Create plan from last response" })
+    { noremap = true, silent = true, desc = "Create plan from last response" }
+  )
 
   -- Update cleanup autocmds to use M.cleanup_buffer
   vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
     buffer = bufnr,
     callback = function()
-      require('llmancer.chat').cleanup_buffer(bufnr)
+      require("llmancer.chat").cleanup_buffer(bufnr)
     end,
     once = true,
   })
 
   -- Add the range command
-  vim.api.nvim_buf_create_user_command(bufnr, 'LLMancerPlan', function(opts)
+  vim.api.nvim_buf_create_user_command(bufnr, "LLMancerPlan", function(opts)
     local start = opts.line1
     local end_line = opts.line2
-    require('llmancer.chat').create_plan_from_range(start, end_line)
+    require("llmancer.chat").create_plan_from_range(start, end_line)
   end, { range = true, desc = "Create application plan from range" })
 end
 
@@ -831,7 +866,7 @@ end
 local function get_range_content(start, end_line)
   local bufnr = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(bufnr, start - 1, end_line, false)
-  return table.concat(lines, '\n')
+  return table.concat(lines, "\n")
 end
 
 -- Function to get the last LLM response
@@ -852,7 +887,7 @@ local function get_last_llm_response()
       -- Find the end of this response (next user prompt or EOF)
       end_line = #lines -- Default to end of buffer
       for j = i + 1, #lines do
-        if lines[j]:match("^user:") then
+        if lines[j]:match "^user:" then
           end_line = j - 1
           break
         end
@@ -862,7 +897,7 @@ local function get_last_llm_response()
   end
 
   if start_line and end_line then
-    local content = table.concat(vim.list_slice(lines, start_line, end_line), '\n')
+    local content = table.concat(vim.list_slice(lines, start_line, end_line), "\n")
     -- Remove the model prefix from the first line
     content = content:gsub("^" .. vim.pesc(config.values.model) .. ":%s*", "")
     return content, start_line, end_line
@@ -885,11 +920,8 @@ function M.create_plan_from_range(start, end_line)
   end
 
   -- Create plan using the existing function
-  local app_plan = require('llmancer.application_plan')
-  app_plan.create_plan(
-    { content },
-    { target_bufnr }
-  )
+  local app_plan = require "llmancer.application_plan"
+  app_plan.create_plan({ content }, { target_bufnr })
 end
 
 -- Function to create application plan from last response
@@ -910,11 +942,8 @@ function M.create_plan_from_last_response()
   end
 
   -- Create plan using the existing function
-  local app_plan = require('llmancer.application_plan')
-  app_plan.create_plan(
-    { content },
-    { target_bufnr }
-  )
+  local app_plan = require "llmancer.application_plan"
+  app_plan.create_plan({ content }, { target_bufnr })
 end
 
 -- Update load_chat function to use config.values
@@ -924,7 +953,7 @@ function M.load_chat(chat_id, target_bufnr)
     config.setup()
   end
 
-  local file_path = config.values.storage_dir .. '/' .. chat_id .. '.llmc'
+  local file_path = config.values.storage_dir .. "/" .. chat_id .. ".llmc"
   -- Check if file exists
   if vim.fn.filereadable(file_path) ~= 1 then
     vim.notify("Cannot read file: " .. file_path, vim.log.levels.ERROR)
@@ -990,8 +1019,8 @@ end
 -- Add this near the end of the file, with the other setup code
 local function setup_commands()
   -- Command to toggle file in context
-  vim.api.nvim_create_user_command('LLMContext', function(opts)
-    require('llmancer.chat').toggle_file_in_context(opts.args)
+  vim.api.nvim_create_user_command("LLMContext", function(opts)
+    require("llmancer.chat").toggle_file_in_context(opts.args)
   end, {
     nargs = 1,
     complete = function(_, _, _)
@@ -1004,7 +1033,7 @@ local function setup_commands()
       end
       return bufs
     end,
-    desc = "Toggle a file in the chat context"
+    desc = "Toggle a file in the chat context",
   })
 end
 

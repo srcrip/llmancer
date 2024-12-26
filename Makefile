@@ -7,7 +7,10 @@ test:
 lint:
 	luacheck .
 
-format:
+format-check:
 	stylua --check .
 
-check: test lint format
+format:
+	stylua .
+
+check: test lint format-check

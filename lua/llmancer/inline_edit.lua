@@ -1,5 +1,5 @@
-local api = require('llmancer.api')
-local indicators = require('llmancer.indicators')
+local api = require "llmancer.api"
+local indicators = require "llmancer.indicators"
 
 local M = {}
 
@@ -14,21 +14,21 @@ local function create_edit_window()
   local row = math.floor((vim.o.lines - height) / 2)
 
   local bufnr = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_option(bufnr, 'bufhidden', 'wipe')
+  vim.api.nvim_buf_set_option(bufnr, "bufhidden", "wipe")
   -- todo: get some other custom filetype made
   -- vim.api.nvim_buf_set_option(bufnr, 'filetype', 'markdown')
 
   local opts = {
-    relative = 'editor',
+    relative = "editor",
     width = width,
     height = height,
     col = col,
     row = row,
-    anchor = 'NW',
-    style = 'minimal',
-    border = 'rounded',
-    title = ' Edit Instructions ',
-    title_pos = 'center',
+    anchor = "NW",
+    style = "minimal",
+    border = "rounded",
+    title = " Edit Instructions ",
+    title_pos = "center",
   }
 
   local win_id = vim.api.nvim_open_win(bufnr, true, opts)
@@ -36,7 +36,7 @@ local function create_edit_window()
   -- Set window-local options for better editing experience
   vim.wo[win_id].wrap = true
   vim.wo[win_id].conceallevel = 2
-  vim.wo[win_id].concealcursor = 'nc'
+  vim.wo[win_id].concealcursor = "nc"
 
   return bufnr, win_id
 end
@@ -49,10 +49,10 @@ end
 ---@field text string Complete selected text
 local function get_visual_selection()
   local mode = vim.fn.mode()
-  if mode == 'n' then
+  if mode == "n" then
     -- Normal mode - get the last visual selection
-    local start_pos = vim.fn.getpos("'<")
-    local end_pos = vim.fn.getpos("'>")
+    local start_pos = vim.fn.getpos "'<"
+    local end_pos = vim.fn.getpos "'>"
     local start_line = start_pos[2]
     local end_line = end_pos[2]
 
@@ -72,12 +72,12 @@ local function get_visual_selection()
       lines = lines,
       start_line = start_line,
       end_line = end_line,
-      text = table.concat(lines, '\n')
+      text = table.concat(lines, "\n"),
     }
-  elseif mode:match('[vV]') then
+  elseif mode:match "[vV]" then
     -- Visual mode - get the current selection
-    local _, csrow, cscol, _ = unpack(vim.fn.getpos('.'))
-    local _, cerow, cecol, _ = unpack(vim.fn.getpos('v'))
+    local _, csrow, cscol, _ = unpack(vim.fn.getpos ".")
+    local _, cerow, cecol, _ = unpack(vim.fn.getpos "v")
 
     -- Normalize positions (make sure start comes before end)
     local start_line = math.min(csrow, cerow)
@@ -94,7 +94,7 @@ local function get_visual_selection()
       lines = lines,
       start_line = start_line,
       end_line = end_line,
-      text = table.concat(lines, '\n')
+      text = table.concat(lines, "\n"),
     }
   end
   return nil
@@ -113,7 +113,7 @@ local function handle_edit_submit(bufnr, win_id, target_bufnr, start_line, end_l
   -- Find the separator line
   local separator_index
   for i, line in ipairs(all_lines) do
-    if line:match("^%-%-%-%-%-%-") then
+    if line:match "^%-%-%-%-%-%-" then
       separator_index = i
       break
     end
@@ -127,13 +127,10 @@ local function handle_edit_submit(bufnr, win_id, target_bufnr, start_line, end_l
     end
   end
 
-  local instruction = table.concat(instruction_lines, '\n')
+  local instruction = table.concat(instruction_lines, "\n")
 
   -- Get the code that was selected
-  local current_code = table.concat(
-    vim.api.nvim_buf_get_lines(target_bufnr, start_line - 1, end_line, false),
-    '\n'
-  )
+  local current_code = table.concat(vim.api.nvim_buf_get_lines(target_bufnr, start_line - 1, end_line, false), "\n")
 
   vim.api.nvim_win_close(win_id, true)
 
@@ -162,42 +159,42 @@ Here are the user's instructions:
 ]]
 
   -- Prepare the message for the AI
-  local message = string.format(
-    msg,
-    current_code,
-    instruction
-  )
+  local message = string.format(msg, current_code, instruction)
 
   -- Send request to the AI
-  api.send_message({
-    { role = "user", content = message }
-  }, nil, function(success, response, error)
-    stop_thinking() -- This will now clear both the indicator and highlights
+  api.send_message(
+    {
+      { role = "user", content = message },
+    },
+    nil,
+    function(success, response, error)
+      stop_thinking() -- This will now clear both the indicator and highlights
 
-    if not success then
-      vim.schedule(function()
-        vim.notify(error, vim.log.levels.ERROR)
-      end)
-      return
-    end
-
-    -- Extract code block from response
-    local code = response:match("```[%w_]*\n(.-)\n```")
-    if not code then
-      vim.schedule(function()
-        vim.notify("No code block found in response", vim.log.levels.ERROR)
-      end)
-      return
-    end
-
-    -- Apply the changes to the buffer
-    vim.schedule(function()
-      if vim.api.nvim_buf_is_valid(target_bufnr) then
-        local lines = vim.split(code, "\n")
-        vim.api.nvim_buf_set_lines(target_bufnr, start_line - 1, end_line, false, lines)
+      if not success then
+        vim.schedule(function()
+          vim.notify(error, vim.log.levels.ERROR)
+        end)
+        return
       end
-    end)
-  end)
+
+      -- Extract code block from response
+      local code = response:match "```[%w_]*\n(.-)\n```"
+      if not code then
+        vim.schedule(function()
+          vim.notify("No code block found in response", vim.log.levels.ERROR)
+        end)
+        return
+      end
+
+      -- Apply the changes to the buffer
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(target_bufnr) then
+          local lines = vim.split(code, "\n")
+          vim.api.nvim_buf_set_lines(target_bufnr, start_line - 1, end_line, false, lines)
+        end
+      end)
+    end
+  )
 end
 
 ---Start the inline editing process
@@ -220,23 +217,23 @@ function M.start_edit()
     "Press <Enter> in normal mode to submit.",
     "----------",
     "",
-    ""
+    "",
   })
 
   -- Set cursor position to the first empty line after the separator
   vim.api.nvim_win_set_cursor(win_id, { 5, 0 })
 
   -- Set up keymaps for the instruction window
-  vim.keymap.set('n', '<CR>', function()
+  vim.keymap.set("n", "<CR>", function()
     handle_edit_submit(edit_bufnr, win_id, target_bufnr, selection.start_line, selection.end_line)
   end, { buffer = edit_bufnr, noremap = true })
 
-  vim.keymap.set('n', 'q', function()
+  vim.keymap.set("n", "q", function()
     vim.api.nvim_win_close(win_id, true)
   end, { buffer = edit_bufnr, noremap = true })
 
   -- Start in insert mode
-  vim.cmd('startinsert')
+  vim.cmd "startinsert"
 end
 
 return M

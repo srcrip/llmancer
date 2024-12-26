@@ -9,7 +9,7 @@
 ---@field storage_dir string Directory to store chat histories
 
 -- Import the main module
-local main = require("llmancer.main")
+local main = require "llmancer.main"
 
 ---@class LLMancerModule
 ---@field setup fun(opts: Config|nil) Function to setup the plugin
