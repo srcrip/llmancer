@@ -781,7 +781,7 @@ function M.send_message()
 end
 
 -- Function to show system prompt in new buffer
-local function show_system_prompt()
+function M.show_system_prompt()
   local bufnr = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_buf_set_name(bufnr, "LLMancer-SystemPrompt")
 
@@ -801,8 +801,38 @@ local function show_system_prompt()
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 end
 
--- Add the keymap in both open_chat and load_chat functions
-local function setup_buffer_mappings(bufnr)
+-- Add this new function near other helper functions
+local function get_code_block_under_cursor(bufnr)
+  local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local start_line = cursor_line
+  local end_line = cursor_line
+
+  -- Find start of code block
+  while start_line > 1 and not lines[start_line - 1]:match "^```" do
+    start_line = start_line - 1
+  end
+
+  -- Find end of code block
+  while end_line < #lines and not lines[end_line + 1]:match "^```" do
+    end_line = end_line + 1
+  end
+
+  -- Verify we found a complete code block
+  if
+    start_line >= 1
+    and end_line <= #lines
+    and lines[start_line - 1]:match "^```"
+    and lines[end_line + 1]:match "^```"
+  then
+    return table.concat(vim.list_slice(lines, start_line, end_line), "\n")
+  end
+
+  return nil
+end
+
+-- Update the setup_buffer_mappings function to modify ga and add gA
+function M.setup_buffer_mappings(bufnr)
   vim.api.nvim_buf_set_keymap(
     bufnr,
     "n",
@@ -831,6 +861,15 @@ local function setup_buffer_mappings(bufnr)
     bufnr,
     "n",
     "ga",
+    [[<cmd>lua require('llmancer.chat').create_plan_from_code_block()<CR>]],
+    { noremap = true, silent = true, desc = "Create plan from code block under cursor" }
+  )
+
+  -- Add new gA mapping for full response
+  vim.api.nvim_buf_set_keymap(
+    bufnr,
+    "n",
+    "gA",
     [[<cmd>lua require('llmancer.chat').create_plan_from_last_response()<CR>]],
     { noremap = true, silent = true, desc = "Create plan from last response" }
   )
@@ -874,8 +913,8 @@ local function get_last_llm_response()
   -- Find the last model response by scanning backwards
   for i = #lines, 1, -1 do
     local line = lines[i]
-    -- Look for the model prefix followed by a colon and optional space
-    if line:match("^" .. vim.pesc(config.values.model) .. ":%s*") then
+    -- Look for assistant prefix
+    if line:match "^assistant:%s*" then
       start_line = i
       -- Find the end of this response (next user prompt or EOF)
       end_line = #lines -- Default to end of buffer
@@ -891,8 +930,8 @@ local function get_last_llm_response()
 
   if start_line and end_line then
     local content = table.concat(vim.list_slice(lines, start_line, end_line), "\n")
-    -- Remove the model prefix from the first line
-    content = content:gsub("^" .. vim.pesc(config.values.model) .. ":%s*", "")
+    -- Remove the assistant prefix
+    content = content:gsub("^assistant:%s*", "")
     return content, start_line, end_line
   end
 
@@ -986,10 +1025,6 @@ function M.load_chat(chat_id, target_bufnr)
   return bufnr
 end
 
--- Export the functions
-M.show_system_prompt = show_system_prompt
-M.setup_buffer_mappings = setup_buffer_mappings
-
 -- Update cleanup_buffer
 function M.cleanup_buffer(bufnr)
   -- Cancel any active job
@@ -1032,5 +1067,25 @@ end
 
 -- Add setup_commands() to the end of the file
 setup_commands()
+
+-- Add new function to create plan from code block
+function M.create_plan_from_code_block()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local code_block = get_code_block_under_cursor(bufnr)
+
+  if not code_block then
+    vim.notify("No code block found under cursor", vim.log.levels.WARN)
+    return
+  end
+
+  local target_bufnr = M.target_buffers[bufnr]
+  if not target_bufnr then
+    vim.notify("No target buffer associated with this chat", vim.log.levels.ERROR)
+    return
+  end
+
+  local app_plan = require "llmancer.application_plan"
+  app_plan.create_plan({ code_block }, { target_bufnr })
+end
 
 return M
