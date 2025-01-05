@@ -43,11 +43,12 @@ function M.validate_config(c)
     "storage_dir",
   }
 
-  for _, key in ipairs(required) do
-    if not c[key] then
-      error(string.format("LLMancer: Missing required config: %s", key))
-    end
-  end
+  -- why did I add this lol
+  -- for _, key in ipairs(required) do
+  --   if not c[key] then
+  --     error(string.format("LLMancer: Missing required config: %s", key))
+  --   end
+  -- end
 end
 
 return M
